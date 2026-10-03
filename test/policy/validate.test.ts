@@ -53,7 +53,10 @@ describe("parsePolicy", () => {
       value: {
         signals: SIGNALS,
         models: MODELS,
-        decisions: [{ ...CODING, onUnknown: "no_match" }, DEFAULT],
+        decisions: [
+          { ...CODING, description: "Coding requests", onUnknown: "no_match" },
+          DEFAULT,
+        ],
       },
     });
   });
@@ -78,7 +81,18 @@ describe("parsePolicy", () => {
 
   it.each([
     ["a policy that is not an object", [], "policy", "must be an object"],
-    ["no decisions", { decisions: [] }, "decisions", "non-empty list"],
+    ["no decisions", { decisions: [] }, "decisions", "1 to 100 decisions"],
+    [
+      "more than 100 decisions",
+      {
+        decisions: Array.from({ length: 101 }, (_, i) => ({
+          ...DEFAULT,
+          name: `d${i}`,
+        })),
+      },
+      "decisions",
+      "1 to 100 decisions",
+    ],
     [
       "an unknown top-level field",
       {
@@ -354,6 +368,38 @@ describe("parsePolicy", () => {
         }),
       );
     });
+  });
+
+  it.each(["constructor", "toString", "__proto__"])(
+    "explains an unknown field named %s in words",
+    (key) => {
+      const input: unknown = JSON.parse(
+        `{"models":[{"id":"m1","contextWindow":1}],"decisions":[{"name":"default","priority":0,"models":["m1"]}],"${key}":1}`,
+      );
+      expect(issuesOf(input)).toEqual([
+        {
+          path: `policy.${key}`,
+          message: expect.stringMatching(/^is not a known field/),
+        },
+      ]);
+    },
+  );
+
+  it("still checks an object's other fields when it has an unknown one", () => {
+    expect(
+      issuesOf({
+        signals: SIGNALS,
+        models: MODELS,
+        decisions: [
+          { ...CODING, name: "bad name", priority: 1.5, tier: 1 },
+          DEFAULT,
+        ],
+      }).map((issue) => issue.path),
+    ).toEqual([
+      "decisions[0].tier",
+      "decisions[0].name",
+      "decisions[0].priority",
+    ]);
   });
 
   it("reports every problem at once", () => {
@@ -658,10 +704,67 @@ describe("the model catalogue and candidates", () => {
       "decisions[0].models[1]",
       "not in the models list",
     ],
+    [
+      "a candidate outside a catalogue that has other problems",
+      policyWith(
+        [{ id: "m1", contextWindow: 0 }],
+        [{ ...DEFAULT, models: ["zzz"] }],
+      ),
+      "decisions[0].models[0]",
+      "names zzz, which is not in the models list",
+    ],
+    [
+      "a candidate outside the catalogue in a decision with other problems",
+      policyWith(MODELS, [{ ...DEFAULT, priority: 1.5, models: ["zzz"] }]),
+      "decisions[0].models[0]",
+      "names zzz, which is not in the models list",
+    ],
+    [
+      "a context window of 0",
+      policyWith([{ id: "m1", contextWindow: 0 }]),
+      "models[0].contextWindow",
+      "positive whole number",
+    ],
+    [
+      "a candidate that is not text",
+      policyWith(MODELS, [{ ...DEFAULT, models: [7] }]),
+      "decisions[0].models[0]",
+      "must be a model ID",
+    ],
+    [
+      "a source that is not text",
+      policyWith([{ id: "m1", contextWindow: 1, source: 3 }]),
+      "models[0].source",
+      "must be text",
+    ],
   ])("rejects %s", (_name, input, path, message) => {
     expect(issuesOf(input)).toContainEqual({
       path,
       message: expect.stringContaining(message),
     });
+  });
+});
+
+describe("the pool", () => {
+  const policy = {
+    models: [
+      { id: "m1", contextWindow: 1 },
+      { id: "m2", contextWindow: 1 },
+    ],
+    decisions: [{ ...DEFAULT, models: ["m1"] }],
+  };
+
+  it("accepts a catalogue inside the pool", () => {
+    expect(parsePolicy(policy, ["m1", "m2", "m3"]).ok).toBe(true);
+  });
+
+  it("rejects a catalogue model outside the pool", () => {
+    const result = parsePolicy(policy, ["m1"]);
+    expect(result.ok ? [] : result.issues).toEqual([
+      {
+        path: "models[1].id",
+        message: "names m2, which is not in the pool every router chooses from",
+      },
+    ]);
   });
 });

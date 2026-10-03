@@ -8,6 +8,7 @@ import {
 import type { Evidence } from "../../src/policy/rules.ts";
 import { POOL } from "../../src/pool.ts";
 
+const PAIR = ["cheap", "strong"];
 const MODELS = [
   { id: "cheap", contextWindow: 1000, tools: false },
   { id: "strong", contextWindow: 100000, tools: true, vision: true },
@@ -52,29 +53,71 @@ const ask = (content: unknown, extra: Record<string, unknown> = {}) => ({
 
 describe("loadPolicy", () => {
   it("rejects an invalid policy with every issue", async () => {
-    const error = await loadPolicy({ decisions: [] }).catch((e: unknown) => e);
+    const error = await loadPolicy({ decisions: [] }, PAIR).catch(
+      (e: unknown) => e,
+    );
     expect(error).toBeInstanceOf(PolicyError);
     expect((error as PolicyError).issues.map((i) => i.path)).toContain(
       "decisions",
     );
   });
 
-  it("versions a policy by its content", async () => {
-    const a = await loadPolicy(POLICY);
-    const b = await loadPolicy(structuredClone(POLICY));
-    const changed = await loadPolicy({
-      ...POLICY,
-      models: [MODELS[0], { ...MODELS[1], contextWindow: 200000 }],
+  it("rejects a catalogue model outside the pool", async () => {
+    const error = await loadPolicy(POLICY, ["strong"]).catch((e: unknown) => e);
+    expect((error as PolicyError).issues).toContainEqual({
+      path: "models[0].id",
+      message: expect.stringContaining("names cheap, which is not in the pool"),
     });
+  });
+
+  it("gives a new version when only a decision's description changes", async () => {
+    const described = (description: string) => ({
+      ...POLICY,
+      decisions: POLICY.decisions.map((d) =>
+        d.name === "coding" ? { ...d, description } : d,
+      ),
+    });
+    const a = await loadPolicy(described("Coding requests"), PAIR);
+    const b = await loadPolicy(described("Programming requests"), PAIR);
+    expect(a.policy.decisions[2]).toMatchObject({
+      description: "Coding requests",
+    });
+    expect(b.version).not.toBe(a.version);
+  });
+
+  it("versions a policy by its content", async () => {
+    const a = await loadPolicy(POLICY, PAIR);
+    const b = await loadPolicy(structuredClone(POLICY), PAIR);
+    const changed = await loadPolicy(
+      {
+        ...POLICY,
+        models: [MODELS[0], { ...MODELS[1], contextWindow: 200000 }],
+      },
+      PAIR,
+    );
     expect(a.version).toMatch(/^[0-9a-f]{16}$/);
     expect(b.version).toBe(a.version);
     expect(changed.version).not.toBe(a.version);
+  });
+
+  it("gives the same version whatever order the fields are written in", async () => {
+    const reverse = (value: object) =>
+      Object.fromEntries(Object.entries(value).reverse());
+    const reordered = reverse({
+      ...POLICY,
+      models: MODELS.map(reverse),
+      decisions: POLICY.decisions.map(reverse),
+    });
+    expect(Object.keys(reordered)[0]).toBe("decisions");
+    expect((await loadPolicy(reordered, PAIR)).version).toBe(
+      (await loadPolicy(POLICY, PAIR)).version,
+    );
   });
 });
 
 describe("routeRequest", () => {
   it("routes to the decision's first eligible model, and explains why", async () => {
-    const loaded = await loadPolicy(POLICY);
+    const loaded = await loadPolicy(POLICY, PAIR);
     const result = routeRequest(loaded, ask("write python"));
     expect(result).toMatchObject({
       outcome: "routed",
@@ -88,7 +131,7 @@ describe("routeRequest", () => {
   });
 
   it("falls through the decision's list when a model cannot serve the request", async () => {
-    const loaded = await loadPolicy(POLICY);
+    const loaded = await loadPolicy(POLICY, PAIR);
     const result = routeRequest(
       loaded,
       ask("hello", { tools: [{ type: "function", function: { name: "f" } }] }),
@@ -109,7 +152,7 @@ describe("routeRequest", () => {
   });
 
   it("fails rather than leave the decision's list when nothing is eligible", async () => {
-    const loaded = await loadPolicy(POLICY);
+    const loaded = await loadPolicy(POLICY, PAIR);
     const result = routeRequest(
       loaded,
       ask("write python", {
@@ -123,7 +166,7 @@ describe("routeRequest", () => {
   });
 
   it("uses external evidence when it is supplied", async () => {
-    const loaded = await loadPolicy(POLICY);
+    const loaded = await loadPolicy(POLICY, PAIR);
     const external: Evidence = new Map([["clef:hard", { state: "matched" }]]);
     expect(routeRequest(loaded, ask("hello"), external)).toMatchObject({
       outcome: "routed",
@@ -134,7 +177,7 @@ describe("routeRequest", () => {
   });
 
   it("applies onUnknown when external evidence is missing", async () => {
-    const loaded = await loadPolicy(POLICY);
+    const loaded = await loadPolicy(POLICY, PAIR);
     const result = routeRequest(loaded, ask("hello"));
     expect(result).toMatchObject({ outcome: "routed", decision: "default" });
     expect(result.traces.find((t) => t.decision === "hard")).toMatchObject({
@@ -144,12 +187,15 @@ describe("routeRequest", () => {
   });
 
   it("fails the request when an unresolved decision says so", async () => {
-    const loaded = await loadPolicy({
-      ...POLICY,
-      decisions: POLICY.decisions.map((d) =>
-        d.name === "guarded" ? { ...d, onUnknown: "fail_request" } : d,
-      ),
-    });
+    const loaded = await loadPolicy(
+      {
+        ...POLICY,
+        decisions: POLICY.decisions.map((d) =>
+          d.name === "guarded" ? { ...d, onUnknown: "fail_request" } : d,
+        ),
+      },
+      PAIR,
+    );
     expect(routeRequest(loaded, ask("write python"))).toMatchObject({
       outcome: "unresolved",
       decision: "guarded",
@@ -159,11 +205,11 @@ describe("routeRequest", () => {
 
 describe("the starter policy", () => {
   it("is valid", async () => {
-    await expect(loadPolicy(starter)).resolves.toBeDefined();
+    await expect(loadPolicy(starter, POOL)).resolves.toBeDefined();
   });
 
   it("describes exactly the pool the Auto Router is given", async () => {
-    const loaded = await loadPolicy(starter);
+    const loaded = await loadPolicy(starter, POOL);
     expect(loaded.policy.models.map((m) => m.id).sort()).toEqual(
       [...POOL].sort(),
     );
@@ -200,7 +246,7 @@ describe("the starter policy", () => {
       "openai/gpt-6-sol",
     ],
   ])("routes %s", async (_name, body, decision, model) => {
-    const loaded = await loadPolicy(starter);
+    const loaded = await loadPolicy(starter, POOL);
     expect(routeRequest(loaded, body)).toMatchObject({
       outcome: "routed",
       decision,

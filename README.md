@@ -64,7 +64,7 @@ Secrets:
 | `AIG_TOKEN`       | A Cloudflare API token with the AI Gateway Run permission                                                                                 |
 | `CLIENT_TOKEN`    | The bearer token callers of this Worker must present. Letters, digits and `. _ ~ + / -` only; the output of `openssl rand -hex 32` fits   |
 
-`AUTO_ROUTER`, in `cloudflare.config.ts`:
+`AUTO_ROUTER`, set in `src/pool.ts` and bound in `cloudflare.config.ts`:
 
 | Field           | Meaning                                                                                                     |
 | --------------- | ----------------------------------------------------------------------------------------------------------- |

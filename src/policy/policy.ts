@@ -66,8 +66,15 @@ export type RouteResult =
   | ({ outcome: "no_eligible_model" } & Chosen)
   | ({ outcome: "unresolved"; decision: string; message: string } & Explained);
 
-export async function loadPolicy(input: unknown): Promise<LoadedPolicy> {
-  const parsed = parsePolicy(input);
+/**
+ * Validates and compiles a policy. Its catalogue may name only `pool` models:
+ * the ones the Auto Router is given, so both routers choose from the same set.
+ */
+export async function loadPolicy(
+  input: unknown,
+  pool: readonly string[],
+): Promise<LoadedPolicy> {
+  const parsed = parsePolicy(input, pool);
   if (!parsed.ok) throw new PolicyError(parsed.issues);
   const policy = parsed.value;
   return {

@@ -8,16 +8,16 @@
  * truth value, an `onUnknown` policy on each decision, and a catch-all default.
  */
 
-/** A leaf: the evidence for one signal, such as the keyword rule `keyword:code_terms`. */
+/** A leaf: a reference to one signal, such as the keyword rule `keyword:code_terms`. */
 export interface SignalRef {
   type: string;
   name: string;
 }
 
-export interface Combination {
-  operator: "AND" | "OR" | "NOT";
-  conditions: readonly RuleNode[];
-}
+/** AND and OR take one condition or more, and NOT exactly one. */
+export type Combination =
+  | { operator: "AND" | "OR"; conditions: readonly [RuleNode, ...RuleNode[]] }
+  | { operator: "NOT"; conditions: readonly [RuleNode] };
 
 export type RuleNode = SignalRef | Combination;
 
@@ -25,12 +25,18 @@ export type RuleNode = SignalRef | Combination;
 export type UnknownPolicy = "no_match" | "match" | "fail_request";
 
 export interface Decision {
+  /** Identifies the decision in traces and logs; it never affects the order. */
   name: string;
+  /** For people. It does not affect routing, but it is part of the policy version. */
+  description?: string;
   /** Higher wins, as upstream. Unique among decisions that have rules. */
   priority: number;
   /** Omitted for the one default decision, which matches every request. */
   rules?: RuleNode;
-  /** Required whenever the rules can evaluate to unknown. */
+  /**
+   * What unknown evidence means for this decision. The validator requires it
+   * when the rules use a signal that can be unknown.
+   */
   onUnknown?: UnknownPolicy;
 }
 

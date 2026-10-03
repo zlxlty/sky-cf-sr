@@ -21,11 +21,11 @@ const signal = (type: string, name: string): SignalRef => ({ type, name });
 const keyword = (name: string) => signal("keyword", name);
 const domain = (name: string) => signal("domain", name);
 const classifier = (name: string) => signal("classifier", name);
-const and = (...conditions: RuleNode[]): RuleNode => ({
+const and = (...conditions: [RuleNode, ...RuleNode[]]): RuleNode => ({
   operator: "AND",
   conditions,
 });
-const or = (...conditions: RuleNode[]): RuleNode => ({
+const or = (...conditions: [RuleNode, ...RuleNode[]]): RuleNode => ({
   operator: "OR",
   conditions,
 });

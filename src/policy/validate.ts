@@ -27,17 +27,21 @@ export interface PolicyIssue {
 export type Parsed<T> =
   { ok: true; value: T } | { ok: false; issues: PolicyIssue[] };
 
+// Names leave out ":", so a signal key such as "keyword:code_terms" splits one way only.
 const NAME_PATTERN = /^[A-Za-z0-9][\w.-]{0,63}$/;
 // A model ID as AI Gateway names it, such as "@cf/qwen/qwen3.8-27b".
 const MODEL_ID_PATTERN = /^[\w@./:-]{1,128}$/;
 const MAX_CANDIDATES = 10;
+const MAX_DECISIONS = 100;
 const UNKNOWN_POLICIES: readonly UnknownPolicy[] = [
   "no_match",
   "match",
   "fail_request",
 ];
 // Upstream fields with no equivalent here get a specific message, since a generic
-// "not a known field" would not say what to write instead.
+// "not a known field" would not say what to write instead. Upstream writes the
+// unknown policy as `on_unknown` at the root of the rules; here it is only the
+// decision's `onUnknown`.
 const LEGACY_RULE_FIELDS: Record<string, string> = {
   on_unknown:
     "belongs on the decision, as onUnknown, not inside its rules; it applies to the whole rule tree",
@@ -59,23 +63,32 @@ const UNSUPPORTED_KEYWORD_FIELDS: Record<string, string> = {
 };
 const MAX_KEYWORDS = 200;
 const MAX_KEYWORD_LENGTH = 200;
-// Bounds on a decision's rule tree, so evaluation cost stays small and predictable.
+// Bounds on each decision's rule tree; with MAX_DECISIONS, they keep evaluation
+// cost small and predictable.
 const MAX_RULE_DEPTH = 16;
 const MAX_RULE_NODES = 256;
 
 /**
  * Checks a policy and returns it typed, or every problem found. Fields the
- * schema does not define are rejected rather than ignored.
+ * schema does not define are rejected rather than ignored. With a `pool`, the
+ * model catalogue may name only models in it.
  */
-export function parsePolicy(input: unknown): Parsed<Policy> {
+export function parsePolicy(
+  input: unknown,
+  pool?: readonly string[],
+): Parsed<Policy> {
   const issues: PolicyIssue[] = [];
-  const policy = readPolicy(input, issues);
+  const policy = readPolicy(input, pool, issues);
   return issues.length === 0 && policy
     ? { ok: true, value: policy }
     : { ok: false, issues };
 }
 
-function readPolicy(input: unknown, issues: PolicyIssue[]): Policy | undefined {
+function readPolicy(
+  input: unknown,
+  pool: readonly string[] | undefined,
+  issues: PolicyIssue[],
+): Policy | undefined {
   const fields = readObject(
     input,
     "policy",
@@ -94,10 +107,15 @@ function readPolicy(input: unknown, issues: PolicyIssue[]): Policy | undefined {
       ? {}
       : readSignals(fields.signals, "signals", issues);
   const models = readModels(fields.models, "models", issues);
-  if (!Array.isArray(fields.decisions) || fields.decisions.length === 0) {
+  if (pool) checkPool(fields.models, pool, issues);
+  if (
+    !Array.isArray(fields.decisions) ||
+    fields.decisions.length === 0 ||
+    fields.decisions.length > MAX_DECISIONS
+  ) {
     issues.push({
       path: "decisions",
-      message: "must be a non-empty list of decisions",
+      message: `must be a list of 1 to ${MAX_DECISIONS} decisions`,
     });
     return undefined;
   }
@@ -106,7 +124,7 @@ function readPolicy(input: unknown, issues: PolicyIssue[]): Policy | undefined {
   );
   checkDecisionSet(decisions, issues);
   if (signals) checkReferences(decisions, signals, issues);
-  if (models) checkModelReferences(decisions, models, issues);
+  checkModelReferences(fields.models, fields.decisions, issues);
   return signals && models && decisions.every((d) => d !== undefined)
     ? {
         ...(typeof fields.description === "string" && {
@@ -204,16 +222,48 @@ function readModel(
   };
 }
 
-/** Every model a decision names must be in the catalogue. */
-function checkModelReferences(
-  decisions: (RoutedDecision | undefined)[],
-  models: readonly ModelProfile[],
+/** The catalogue may name only pool models, so every router chooses from the same ones. */
+function checkPool(
+  models: unknown,
+  pool: readonly string[],
   issues: PolicyIssue[],
 ): void {
-  const known = new Set(models.map((model) => model.id));
+  if (!Array.isArray(models)) return;
+  models.forEach((model, i) => {
+    if (
+      isObject(model) &&
+      typeof model.id === "string" &&
+      !pool.includes(model.id)
+    ) {
+      issues.push({
+        path: `models[${i}].id`,
+        message: `names ${model.id}, which is not in the pool every router chooses from`,
+      });
+    }
+  });
+}
+
+/**
+ * Every model a decision names must be in the catalogue. This reads the raw
+ * input, so an unknown candidate is reported even when the catalogue or the
+ * decision has other problems.
+ */
+function checkModelReferences(
+  models: unknown,
+  decisions: unknown[],
+  issues: PolicyIssue[],
+): void {
+  // Without a catalogue list every candidate would be unknown; that is reported already.
+  if (!Array.isArray(models)) return;
+  const known = new Set(
+    models.flatMap((model) =>
+      isObject(model) && typeof model.id === "string" ? [model.id] : [],
+    ),
+  );
   decisions.forEach((decision, i) => {
-    decision?.models.forEach((id, j) => {
-      if (!known.has(id)) {
+    if (!isObject(decision) || !Array.isArray(decision.models)) return;
+    decision.models.forEach((id: unknown, j) => {
+      if (typeof id === "string" && !known.has(id)) {
         issues.push({
           path: `decisions[${i}].models[${j}]`,
           message: `names ${id}, which is not in the models list`,
@@ -543,13 +593,7 @@ function readDecision(
   if (!fields) return undefined;
   const before = issues.length;
 
-  if (typeof fields.name !== "string" || !NAME_PATTERN.test(fields.name)) {
-    issues.push({
-      path: `${path}.name`,
-      message:
-        "must be 1 to 64 letters, digits, '.', '_' or '-', starting with a letter or digit",
-    });
-  }
+  checkName(fields.name, `${path}.name`, issues);
   if (
     fields.description !== undefined &&
     typeof fields.description !== "string"
@@ -613,6 +657,9 @@ function readDecision(
   if (issues.length > before) return undefined;
   return {
     name: fields.name as string,
+    ...(typeof fields.description === "string" && {
+      description: fields.description,
+    }),
     priority: fields.priority as number,
     ...(rules && { rules }),
     ...(onUnknown !== undefined && { onUnknown: onUnknown as UnknownPolicy }),
@@ -675,16 +722,21 @@ function readRule(
     if (conditions.length === 0) {
       issues.push({
         path: `${path}.conditions`,
-        message: `${operator} needs at least one condition; a decision that matches everything is written without rules`,
+        message:
+          operator === "AND"
+            ? "AND needs at least one condition; a decision that matches everything is written without rules"
+            : "OR needs at least one condition",
       });
       return undefined;
     }
     const children = conditions.map((child, i) =>
       readRule(child, `${path}.conditions[${i}]`, depth + 1, counter, issues),
     );
-    return children.every((c) => c !== undefined)
-      ? { operator, conditions: children as RuleNode[] }
-      : undefined;
+    if (!children.every((c) => c !== undefined)) return undefined;
+    const [first, ...rest] = children;
+    return operator === "NOT"
+      ? { operator, conditions: [first] }
+      : { operator, conditions: [first, ...rest] };
   }
 
   const fields = readObject(
@@ -695,21 +747,12 @@ function readRule(
     LEGACY_RULE_FIELDS,
   );
   if (!fields) return undefined;
-  let valid = true;
-  for (const key of ["type", "name"] as const) {
-    const text = fields[key];
-    if (typeof text !== "string" || !NAME_PATTERN.test(text)) {
-      issues.push({
-        path: `${path}.${key}`,
-        message:
-          "must be 1 to 64 letters, digits, '.', '_' or '-', starting with a letter or digit",
-      });
-      valid = false;
-    }
-  }
-  return valid
-    ? { type: fields.type as string, name: fields.name as string }
-    : undefined;
+  const before = issues.length;
+  checkName(fields.type, `${path}.type`, issues);
+  checkName(fields.name, `${path}.name`, issues);
+  return issues.length > before
+    ? undefined
+    : { type: fields.type as string, name: fields.name as string };
 }
 
 function checkDecisionSet(
@@ -759,6 +802,10 @@ function checkDecisionSet(
   }
 }
 
+/**
+ * Returns `value` if it is an object. A field it may not have is reported, but
+ * the object is still returned, so its other fields are checked too.
+ */
 function readObject(
   value: unknown,
   path: string,
@@ -770,19 +817,18 @@ function readObject(
     issues.push({ path, message: "must be an object" });
     return undefined;
   }
-  let valid = true;
   for (const key of Object.keys(value)) {
     if (!allowed.includes(key)) {
       issues.push({
         path: `${path}.${key}`,
-        message:
-          explained[key] ??
-          `is not a known field; expected ${allowed.join(", ")}`,
+        // Own fields only: a key such as "constructor" must not find Object's.
+        message: Object.hasOwn(explained, key)
+          ? explained[key]!
+          : `is not a known field; expected ${allowed.join(", ")}`,
       });
-      valid = false;
     }
   }
-  return valid ? value : undefined;
+  return value;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
