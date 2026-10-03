@@ -17,7 +17,12 @@ The request body must be a JSON object with `"model": "cloudflare/auto"`. The Wo
 ### What the Worker cannot control
 
 - **The Auto Router's own fallback.** If the model it chose cannot serve the request, AI Gateway tries another eligible model. That is a second generation call, and it cannot be turned off. It shows as the routing reason `fallback_candidate_unavailable`.
-- **A caller who leaves before response headers.** In local tests the Gateway call kept running until its response arrived, even with the `enable_request_signal` compatibility flag set. The request is then logged with `ended: "cancelled"` once the headers arrive. A caller who leaves while a response is streaming does cancel the Gateway call.
+- **A caller who leaves before response headers.** Deployed, Cloudflare cancels the Worker's invocation when the caller disconnects, so no log line is written for that request; in one test the Gateway logged no entry for it either. Under `cf dev` the Gateway call instead keeps running until its response arrives, and is then logged with `ended: "cancelled"`. A caller who leaves while a response is streaming cancels the Gateway call in both.
+
+### Calling it
+
+- **Set a user agent.** Cloudflare's bot check can reject some HTTP clients' default user agents with error 1010.
+- **Leave room for reasoning.** Reasoning models spend output tokens on reasoning first. With a small `max_tokens` the reply can come back empty, or fail with `500` and still be billed.
 
 ## Benchmark harness headers
 
