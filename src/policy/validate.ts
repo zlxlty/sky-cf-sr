@@ -332,7 +332,7 @@ function readKeywordSignal(
       if (
         typeof keyword !== "string" ||
         keyword.trim() === "" ||
-        keyword.length > MAX_KEYWORD_LENGTH
+        [...keyword].length > MAX_KEYWORD_LENGTH
       ) {
         issues.push({
           path: `${path}.keywords[${i}]`,
@@ -465,37 +465,41 @@ function readExternalSignal(
 }
 
 /**
- * Every signal a rule refers to must be declared, and a decision that refers
- * to an external signal must say what unknown evidence means for it.
+ * Every signal a rule refers to must be declared. A decision that refers to a
+ * signal whose evidence can be unknown must say what unknown means for it:
+ * external signals, and keyword signals, which are unknown when a message is
+ * too long to search whole.
  */
 function checkReferences(
   decisions: (Decision | undefined)[],
   signals: Signals,
   issues: PolicyIssue[],
 ): void {
-  const declared = new Set<string>([
-    ...(signals.keyword ?? []).map((s) => `keyword:${s.name}`),
-    ...(signals.fact ?? []).map((s) => `fact:${s.name}`),
-  ]);
-  const external = new Set(
-    (signals.external ?? []).map((s) => `${s.type}:${s.name}`),
+  const alwaysKnown = new Set(
+    (signals.fact ?? []).map((s) => signalKey({ type: "fact", name: s.name })),
   );
+  const canBeUnknown = new Set([
+    ...(signals.keyword ?? []).map((s) =>
+      signalKey({ type: "keyword", name: s.name }),
+    ),
+    ...(signals.external ?? []).map(signalKey),
+  ]);
   decisions.forEach((decision, i) => {
     if (!decision?.rules) return;
-    const usesExternal: string[] = [];
+    const uncertain = new Set<string>();
     walkSignals(decision.rules, `decisions[${i}].rules`, (key, path) => {
-      if (external.has(key)) usesExternal.push(key);
-      else if (!declared.has(key)) {
+      if (canBeUnknown.has(key)) uncertain.add(key);
+      else if (!alwaysKnown.has(key)) {
         issues.push({
           path,
           message: `refers to ${key}, which is not declared in signals`,
         });
       }
     });
-    if (usesExternal.length > 0 && decision.onUnknown === undefined) {
+    if (uncertain.size > 0 && decision.onUnknown === undefined) {
       issues.push({
         path: `decisions[${i}].onUnknown`,
-        message: `is required, because the rules use ${[...new Set(usesExternal)].join(", ")}, whose evidence can be unknown`,
+        message: `is required, because the rules use ${[...uncertain].join(", ")}, whose evidence can be unknown`,
       });
     }
   });

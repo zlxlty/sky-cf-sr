@@ -86,6 +86,7 @@
       "name": "coding",
       "priority": 10,
       "rules": { "type": "keyword", "name": "code_terms" },
+      "onUnknown": "no_match",
       "models": ["@cf/moonshotai/kimi-k2.7-code", "openai/gpt-6-sol"]
     },
     {

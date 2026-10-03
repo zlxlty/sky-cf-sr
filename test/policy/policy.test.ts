@@ -38,6 +38,7 @@ const POLICY = {
       name: "coding",
       priority: 10,
       rules: { type: "keyword", name: "code" },
+      onUnknown: "no_match",
       models: ["cheap"],
     },
     { name: "default", priority: 0, models: ["cheap", "strong"] },

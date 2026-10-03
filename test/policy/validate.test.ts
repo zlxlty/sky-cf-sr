@@ -7,6 +7,7 @@ const CODING = {
   name: "coding",
   priority: 10,
   models: ["m1"],
+  onUnknown: "no_match",
   rules: {
     operator: "OR",
     conditions: [
@@ -417,6 +418,18 @@ describe("signal declarations", () => {
       "clef:hard, whose evidence can be unknown",
     ],
     [
+      "a keyword signal without onUnknown",
+      withSignals(SIGNALS, uses("keyword", "code_terms")),
+      "decisions[0].onUnknown",
+      "keyword:code_terms, whose evidence can be unknown",
+    ],
+    [
+      "a keyword longer than 200 characters",
+      withSignals({ keyword: [{ ...code, keywords: ["😀".repeat(201)] }] }),
+      "signals.keyword[0].keywords[0]",
+      "1 to 200 characters",
+    ],
+    [
       "a repeated signal",
       withSignals({ keyword: [code, code] }),
       "signals.keyword[1]",
@@ -519,6 +532,14 @@ describe("signal declarations", () => {
       path,
       message: expect.stringContaining(message),
     });
+  });
+
+  it("counts a keyword's length in characters, not UTF-16 units", () => {
+    expect(
+      parsePolicy(
+        withSignals({ keyword: [{ ...code, keywords: ["😀".repeat(200)] }] }),
+      ).ok,
+    ).toBe(true);
   });
 
   it("requires onUnknown when an external signal is anywhere in the rules", () => {

@@ -10,6 +10,8 @@
  * separate words with spaces.
  */
 
+import { isHighSurrogate, isLowSurrogate } from "./encoding.ts";
+
 export type KeywordOperator = "AND" | "OR" | "NOR";
 
 // A neighbouring character that joins a keyword to a longer word.
@@ -20,26 +22,31 @@ const WORD_LIKE = /[\p{L}\p{Nd}_]/u;
 // The characters that must be escaped in a regular expression with the u flag.
 const SYNTAX = /[\\^$.*+?()[\]{}|/]/g;
 
-/** Returns a test for one keyword, compiled once. */
+/**
+ * Returns a test for one keyword, compiled once. When `cut` is true the text
+ * is the start of a longer one, so a match touching its end does not count:
+ * the next character, which would decide the boundary, is missing.
+ */
 export function compileKeyword(
   keyword: string,
   caseSensitive: boolean,
-): (text: string) => boolean {
+): (text: string, cut?: boolean) => boolean {
   const pattern = new RegExp(
     keyword.replace(SYNTAX, "\\$&"),
     caseSensitive ? "gu" : "giu",
   );
   const needsBoundary = !CJK.test(keyword) && WORD_LIKE.test(keyword);
 
-  return (text) => {
+  return (text, cut = false) => {
     pattern.lastIndex = 0;
     for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
       if (!needsBoundary) return true;
       const start = match.index;
       const end = start + match[0].length;
+      const after = charAt(text, end);
       if (
         isSeparator(charBefore(text, start)) &&
-        isSeparator(charAt(text, end))
+        (after === undefined ? !cut : isSeparator(after))
       ) {
         return true;
       }
@@ -50,20 +57,43 @@ export function compileKeyword(
   };
 }
 
-/** Returns a test for a keyword rule: all keywords (AND), any (OR), or none (NOR). */
+/**
+ * Returns a test for a keyword rule: all keywords (AND), any (OR), or none
+ * (NOR). When `cut` is true and the rest of the text could change the answer,
+ * the answer is undefined: unknown.
+ */
 export function compileKeywordRule(
   operator: KeywordOperator,
   keywords: readonly string[],
   caseSensitive: boolean,
-): (text: string) => boolean {
+): (text: string, cut?: boolean) => boolean | undefined {
   const tests = keywords.map((k) => compileKeyword(k, caseSensitive));
+  // What finding the keywords decides; not finding them is only final when
+  // the whole text was searched.
+  const decided = (found: boolean, ifFound: boolean, cut: boolean) =>
+    found ? ifFound : cut ? undefined : !ifFound;
   switch (operator) {
     case "AND":
-      return (text) => tests.every((test) => test(text));
+      return (text, cut = false) =>
+        decided(
+          tests.every((test) => test(text, cut)),
+          true,
+          cut,
+        );
     case "OR":
-      return (text) => tests.some((test) => test(text));
+      return (text, cut = false) =>
+        decided(
+          tests.some((test) => test(text, cut)),
+          true,
+          cut,
+        );
     case "NOR":
-      return (text) => !tests.some((test) => test(text));
+      return (text, cut = false) =>
+        decided(
+          tests.some((test) => test(text, cut)),
+          false,
+          cut,
+        );
   }
 }
 
@@ -82,7 +112,9 @@ function charAt(text: string, index: number): string | undefined {
 /** The character (code point) ending just before `index`, or undefined at the start. */
 function charBefore(text: string, index: number): string | undefined {
   if (index === 0) return undefined;
-  const low = text.charCodeAt(index - 1);
-  const isLowSurrogate = low >= 0xdc00 && low <= 0xdfff;
-  return charAt(text, isLowSurrogate && index >= 2 ? index - 2 : index - 1);
+  const pair =
+    index >= 2 &&
+    isLowSurrogate(text.charCodeAt(index - 1)) &&
+    isHighSurrogate(text.charCodeAt(index - 2));
+  return charAt(text, pair ? index - 2 : index - 1);
 }

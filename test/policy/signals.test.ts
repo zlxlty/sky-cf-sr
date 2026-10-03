@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractFacts } from "../../src/policy/facts.ts";
+import { extractFacts, MAX_PROJECTED_CHARS } from "../../src/policy/facts.ts";
 import type { Evidence } from "../../src/policy/rules.ts";
 import { compileSignals, type Signals } from "../../src/policy/signals.ts";
 
@@ -54,6 +54,22 @@ describe("compileSignals", () => {
     expect(states(evidenceFor(facts))).toMatchObject({
       "keyword:code_terms": "unmatched",
       "keyword:no_greeting": "matched",
+    });
+  });
+
+  it("makes keyword evidence unknown when the cut-off rest could change it", () => {
+    const facts = extractFacts({
+      messages: [
+        { role: "user", content: "hello " + "x ".repeat(MAX_PROJECTED_CHARS) },
+      ],
+    });
+    expect(states(evidenceFor(facts))).toMatchObject({
+      // "hello" was found, so the rest cannot change these.
+      "keyword:no_greeting": "unmatched",
+      // "python" might be in the rest.
+      "keyword:code_terms": expect.stringContaining(
+        `unknown: only the first ${MAX_PROJECTED_CHARS} characters`,
+      ),
     });
   });
 

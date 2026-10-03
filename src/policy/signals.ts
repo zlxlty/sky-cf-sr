@@ -1,8 +1,12 @@
-import type { Facts } from "./facts.ts";
+import { MAX_PROJECTED_CHARS, type Facts } from "./facts.ts";
 import { compileKeywordRule, type KeywordOperator } from "./keywords.ts";
 import type { Evidence, SignalEvidence } from "./rules.ts";
 
-/** Matches the latest user message against literal keywords. Referenced as `keyword:<name>`. */
+/**
+ * Matches the latest user message against literal keywords. Referenced as
+ * `keyword:<name>`. Unknown when the message was too long to search whole and
+ * the unsearched rest could change the answer.
+ */
 export interface KeywordSignal {
   name: string;
   operator: KeywordOperator;
@@ -71,12 +75,16 @@ const NOT_SUPPLIED: SignalEvidence = {
   state: "unknown",
   reason: "no evidence was supplied for this signal",
 };
+const CUT: SignalEvidence = {
+  state: "unknown",
+  reason: `only the first ${MAX_PROJECTED_CHARS} characters of the latest user message were searched, and the rest could change the result`,
+};
 
 /**
  * Compiles the declared signals once, and returns a function that produces
- * the evidence for one request. Keyword and fact signals are always resolved.
- * An external signal takes its evidence from `external`, and is unknown when
- * none was supplied.
+ * the evidence for one request. Fact signals are always resolved, and keyword
+ * signals unless the message was cut. An external signal takes its evidence
+ * from `external`, and is unknown when none was supplied.
  */
 export function compileSignals(
   signals: Signals,
@@ -93,7 +101,11 @@ export function compileSignals(
   return (facts, external = new Map()) => {
     const evidence = new Map<string, SignalEvidence>();
     for (const { key, test } of keywordTests) {
-      evidence.set(key, test(facts.latestUserText) ? MATCHED : UNMATCHED);
+      const found = test(facts.latestUserText, facts.latestUserTextTruncated);
+      evidence.set(
+        key,
+        found === undefined ? CUT : found ? MATCHED : UNMATCHED,
+      );
     }
     for (const signal of signals.fact ?? []) {
       evidence.set(

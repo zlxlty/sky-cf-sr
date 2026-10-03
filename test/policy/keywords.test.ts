@@ -141,6 +141,12 @@ describe("keyword rules", () => {
     expect(compileKeyword("go", false)("💡go")).toBe(true);
   });
 
+  it("treats a lone low surrogate before a keyword as a separator, as Go's U+FFFD", () => {
+    expect(
+      compileKeyword("foo", false)(`x${String.fromCharCode(0xdc00)}foo`),
+    ).toBe(true);
+  });
+
   it("gives the same answer when called again", () => {
     const test = compileKeyword("python", false);
     expect([test("python"), test("python"), test("no")]).toEqual([
@@ -148,5 +154,32 @@ describe("keyword rules", () => {
       true,
       false,
     ]);
+  });
+});
+
+describe("keywords in cut text", () => {
+  it("does not count a match that touches the cut", () => {
+    const python = compileKeyword("python", false);
+    expect(python("I like python", false)).toBe(true);
+    // The cut text might continue "pythonic".
+    expect(python("I like python", true)).toBe(false);
+    expect(python("I like python code", true)).toBe(true);
+  });
+
+  it("still counts a keyword that needs no boundary at the cut", () => {
+    expect(compileKeyword("数学", false)("我喜欢数学", true)).toBe(true);
+  });
+
+  it.each([
+    ["OR", ["python"], "write python code", true],
+    ["OR", ["python"], "write rust code", undefined],
+    ["AND", ["python", "rust"], "python and rust code", true],
+    ["AND", ["python", "rust"], "python code", undefined],
+    ["NOR", ["python"], "write python code", false],
+    ["NOR", ["python"], "write rust code", undefined],
+  ] as const)("%s %j in %j is %s", (operator, keywords, text, expected) => {
+    expect(compileKeywordRule(operator, keywords, false)(text, true)).toBe(
+      expected,
+    );
   });
 });
