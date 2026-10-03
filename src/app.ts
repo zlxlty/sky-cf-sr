@@ -2,14 +2,15 @@ import { Hono } from "hono";
 import { bearerAuth } from "hono/bearer-auth";
 import { HTTPException } from "hono/http-exception";
 import { timingSafeEqual } from "hono/utils/buffer";
+import { handleChat, type Deps } from "./chat.ts";
 import {
   ConfigError,
   readSettings,
   type RawEnv,
   type Settings,
 } from "./config.ts";
+import { entrypoints, POLICIES } from "./entrypoints.ts";
 import { errorBody, errorResponse } from "./errors.ts";
-import { passthrough, type Deps } from "./passthrough.ts";
 
 type AppEnv = { Bindings: RawEnv; Variables: { settings: Settings } };
 
@@ -23,8 +24,13 @@ const UNAUTHORIZED = {
   ),
 };
 
-export function createApp(deps: Deps) {
+/** `policies` are the ones served as `policy/<name>`; tests pass their own. */
+export function createApp(
+  deps: Deps,
+  policies: Readonly<Record<string, unknown>> = POLICIES,
+) {
   const app = new Hono<AppEnv>();
+  const served = entrypoints(policies);
 
   app.use(CHAT_COMPLETIONS, async (c, next) => {
     c.set("settings", await readSettings(c.env));
@@ -48,7 +54,7 @@ export function createApp(deps: Deps) {
     }),
   );
   app.post(CHAT_COMPLETIONS, (c) =>
-    passthrough(c.req.raw, c.var.settings, deps),
+    handleChat(c.req.raw, c.var.settings, deps, served),
   );
   app.all(CHAT_COMPLETIONS, () =>
     errorResponse(

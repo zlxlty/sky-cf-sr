@@ -8,9 +8,16 @@ export interface RawEnv {
   AUTO_ROUTER?: unknown;
 }
 
-/** How the Worker calls the Auto Router; everything here but `logPayloads` is in the config hash. */
+/**
+ * How the Worker calls the Auto Router; everything here but `logPayloads` is
+ * in its config hash. The pool, the deadline and `logPayloads` also apply to
+ * the policy and direct entrypoints.
+ */
 export interface AutoRouterPolicy {
-  /** The models the Auto Router may choose from, sent in this order. */
+  /**
+   * The pool: the models the Auto Router may choose from, sent in this order.
+   * Policies and direct calls may use only these.
+   */
   allowedModels: readonly string[];
   /** The day the pool was last checked against Cloudflare's model list. */
   poolPinnedOn: string;
@@ -26,7 +33,7 @@ export interface Settings extends AutoRouterPolicy {
   gatewayToken: string;
   /** The bearer token callers of this Worker must present. */
   clientToken: string;
-  /** Identifies the policy, so benchmark runs can prove which setup they measured. */
+  /** The `cloudflare/auto` entrypoint's config hash; see `configHash` in `gateway.ts`. */
   configHash: string;
 }
 

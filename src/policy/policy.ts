@@ -67,6 +67,18 @@ export type RouteResult =
   | ({ outcome: "unresolved"; decision: string; message: string } & Explained);
 
 /**
+ * A route result small enough for a log line: the traces are replaced by the
+ * decisions whose unknown evidence `onUnknown` settled. The policy version,
+ * the request and any external evidence give the traces again.
+ */
+export type RouteSummary = WithoutTraces<RouteResult> & {
+  /** As `decision=policy`, like upstream's `x-vsr-applied-unknown-policy` header. */
+  appliedUnknownPolicy: string[];
+};
+
+type WithoutTraces<R> = R extends unknown ? Omit<R, "traces"> : never;
+
+/**
  * Validates and compiles a policy. Its catalogue may name only `pool` models:
  * the ones the Auto Router is given, so both routers choose from the same set.
  */
@@ -133,4 +145,14 @@ export function routeRequest(
         : { outcome: "routed", model, ...chosen };
     }
   }
+}
+
+export function summarizeRoute(result: RouteResult): RouteSummary {
+  const { traces, ...rest } = result;
+  return {
+    ...(rest as WithoutTraces<RouteResult>),
+    appliedUnknownPolicy: traces.flatMap((trace) =>
+      trace.appliedPolicy ? [`${trace.decision}=${trace.appliedPolicy}`] : [],
+    ),
+  };
 }
