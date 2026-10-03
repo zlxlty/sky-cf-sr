@@ -1,7 +1,8 @@
-import { env } from "cloudflare:workers";
+import { createApp } from "./app.ts";
 
-export default {
-	fetch() {
-		return new Response(`Hello ${env.WORLD}!`);
-	},
-} satisfies ExportedHandler;
+export default createApp({
+  fetch: (request) => fetch(request),
+  log: (record) => console.log(JSON.stringify(record)),
+  now: Date.now,
+  deadline: (ms) => AbortSignal.timeout(ms),
+}) satisfies ExportedHandler<Env>;

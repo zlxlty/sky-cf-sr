@@ -1,17 +1,25 @@
 {
-	"name": "sky-cf-sr",
-	"private": true,
-	"type": "module",
-	"scripts": {
-		"dev": "cf dev",
-		"build": "cf build",
-		"deploy": "cf deploy",
-		"typecheck": "cf workers types && tsc"
-	},
-	"devDependencies": {
-		"@cloudflare/vite-plugin": "beta",
-		"cf": "^1.0.0-beta.10",
-		"typescript": "^7.0.2",
-		"vite": "^8.3.0"
-	}
+  "name": "sky-cf-sr",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "cf dev",
+    "build": "cf build",
+    "deploy": "cf deploy",
+    "test": "vitest run",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "cf workers types && tsc"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "beta",
+    "cf": "^1.0.0-beta.10",
+    "prettier": "^3.9.9",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.3"
+  },
+  "dependencies": {
+    "hono": "^4.13.12"
+  }
 }

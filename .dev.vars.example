@@ -1,0 +1,13 @@
+# Copy to .dev.vars for `npm run dev`. Never commit the copy.
+
+# Your AI Gateway's base URL, which contains your account ID and gateway ID:
+# https://gateway.ai.cloudflare.com/v1/<account id>/<gateway id>
+AIG_GATEWAY_URL=
+
+# A Cloudflare API token with the "AI Gateway: Run" permission.
+AIG_TOKEN=
+
+# The bearer token callers of this Worker must present: letters, digits and
+# . _ ~ + / - only. Choose a long random value, such as the output of
+# `openssl rand -hex 32`.
+CLIENT_TOKEN=
