@@ -10,7 +10,14 @@
     "allowImportingTsExtensions": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "resolveJsonModule": true
   },
-  "include": ["src", "test", "cloudflare.config.ts", ".cloudflare/types"]
+  "include": [
+    "src",
+    "test",
+    "policy",
+    "cloudflare.config.ts",
+    ".cloudflare/types"
+  ]
 }

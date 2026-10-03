@@ -1,5 +1,6 @@
 import { bindings, defineConfig } from "cf/config";
 import * as entrypoint from "./src/index.ts" with { type: "cf-worker" };
+import { POOL } from "./src/pool.ts";
 
 export default defineConfig({
   worker: {
@@ -16,14 +17,7 @@ export default defineConfig({
       AIG_TOKEN: bindings.secret(),
       CLIENT_TOKEN: bindings.secret(),
       AUTO_ROUTER: bindings.json({
-        allowedModels: [
-          "openai/gpt-5.6-luna",
-          "@cf/google/gemma-4-26b-a4b-it",
-          "@cf/qwen/qwen3.8-27b",
-          "@cf/moonshotai/kimi-k2.7-code",
-          "anthropic/claude-opus-5.5",
-          "openai/gpt-6-sol",
-        ],
+        allowedModels: POOL,
         poolPinnedOn: "2026-10-01",
         deadlineMs: 600_000,
         // Benchmark prompts are public. Set this to false before sending private

@@ -8,8 +8,6 @@
  * truth value, an `onUnknown` policy on each decision, and a catch-all default.
  */
 
-import type { Signals } from "./signals.ts";
-
 /** A leaf: the evidence for one signal, such as the keyword rule `keyword:code_terms`. */
 export interface SignalRef {
   type: string;
@@ -36,10 +34,9 @@ export interface Decision {
   onUnknown?: UnknownPolicy;
 }
 
-export interface Policy {
-  /** The signals the rules refer to; see `signals.ts`. */
-  signals?: Signals;
-  decisions: readonly Decision[];
+/** The decisions to choose between. The full policy, with signals and models, is in `policy.ts`. */
+export interface RuleSet<D extends Decision = Decision> {
+  decisions: readonly D[];
 }
 
 export type Truth = "true" | "false" | "unknown";
@@ -81,10 +78,10 @@ export interface Ranking {
   runnerUp?: string;
 }
 
-export type PolicyResult =
+export type PolicyResult<D extends Decision = Decision> =
   | {
       outcome: "selected";
-      decision: Decision;
+      decision: D;
       /** The signals that made the decision match, or `on_unknown:match`. */
       matchedSignals: string[];
       ranking: Ranking;
@@ -185,8 +182,8 @@ export function evaluateRules(node: RuleNode, evidence: Evidence): NodeResult {
   };
 }
 
-interface Match {
-  decision: Decision;
+interface Match<D extends Decision = Decision> {
+  decision: D;
   matchedSignals: string[];
 }
 
@@ -196,12 +193,12 @@ interface Match {
  * decision is evaluated before anything is chosen. Among matches the default
  * ranks last, then higher priority wins.
  */
-export function evaluatePolicy(
-  policy: Policy,
+export function evaluatePolicy<D extends Decision>(
+  policy: RuleSet<D>,
   evidence: Evidence,
-): PolicyResult {
+): PolicyResult<D> {
   const traces: DecisionTrace[] = [];
-  const matches: Match[] = [];
+  const matches: Match<D>[] = [];
   let failure: { decision: string; message: string } | undefined;
 
   for (const decision of policy.decisions) {
@@ -240,7 +237,7 @@ export function evaluatePolicy(
   if (matches.length === 0) return { outcome: "no_match", traces };
 
   matches.sort(compareMatches);
-  const [winner, runnerUp] = matches as [Match, Match | undefined];
+  const [winner, runnerUp] = matches as [Match<D>, Match<D> | undefined];
   return {
     outcome: "selected",
     decision: winner.decision,

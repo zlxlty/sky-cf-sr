@@ -1,0 +1,97 @@
+{
+  "description": "A starter policy that shows the shape and exercises each part of the engine. Its decisions are not tuned; replace them before measuring anything.",
+  "signals": {
+    "keyword": [
+      {
+        "name": "code_terms",
+        "operator": "OR",
+        "keywords": [
+          "python",
+          "javascript",
+          "typescript",
+          "rust",
+          "golang",
+          "C++",
+          "C#",
+          "SQL",
+          "stack trace",
+          "refactor",
+          "unit test"
+        ]
+      }
+    ],
+    "fact": [
+      {
+        "name": "long_context",
+        "fact": "contextTokenEstimate",
+        "atLeast": 100000
+      }
+    ]
+  },
+  "models": [
+    {
+      "id": "openai/gpt-5.6-luna",
+      "contextWindow": 1050000,
+      "tools": true,
+      "structuredOutput": true,
+      "vision": true,
+      "source": "OpenRouter models API, 2026-10-03"
+    },
+    {
+      "id": "@cf/google/gemma-4-26b-a4b-it",
+      "contextWindow": 256000,
+      "tools": true,
+      "vision": true,
+      "source": "Workers AI model catalogue (cf ai models list), 2026-10-03; structured output not listed"
+    },
+    {
+      "id": "@cf/qwen/qwen3.8-27b",
+      "contextWindow": 262144,
+      "tools": true,
+      "vision": true,
+      "source": "Workers AI model catalogue (cf ai models list), 2026-10-03; structured output not listed"
+    },
+    {
+      "id": "@cf/moonshotai/kimi-k2.7-code",
+      "contextWindow": 262144,
+      "tools": true,
+      "vision": true,
+      "source": "Workers AI model catalogue (cf ai models list), 2026-10-03; structured output not listed"
+    },
+    {
+      "id": "anthropic/claude-opus-5.5",
+      "contextWindow": 1000000,
+      "tools": true,
+      "structuredOutput": true,
+      "vision": true,
+      "source": "OpenRouter models API, 2026-10-03"
+    },
+    {
+      "id": "openai/gpt-6-sol",
+      "contextWindow": 1050000,
+      "tools": true,
+      "structuredOutput": true,
+      "vision": true,
+      "source": "OpenRouter models API, 2026-10-03"
+    }
+  ],
+  "decisions": [
+    {
+      "name": "long-context",
+      "priority": 20,
+      "rules": { "type": "fact", "name": "long_context" },
+      "models": ["openai/gpt-5.6-luna", "openai/gpt-6-sol"]
+    },
+    {
+      "name": "coding",
+      "priority": 10,
+      "rules": { "type": "keyword", "name": "code_terms" },
+      "models": ["@cf/moonshotai/kimi-k2.7-code", "openai/gpt-6-sol"]
+    },
+    {
+      "name": "default",
+      "priority": 0,
+      "models": ["openai/gpt-5.6-luna", "openai/gpt-6-sol"]
+    }
+  ]
+}

@@ -1,8 +1,9 @@
+import type { ModelProfile } from "./eligibility.ts";
+import type { Policy, RoutedDecision } from "./policy.ts";
 import {
   isSignal,
   signalKey,
   type Decision,
-  type Policy,
   type RuleNode,
   type UnknownPolicy,
 } from "./rules.ts";
@@ -27,6 +28,9 @@ export type Parsed<T> =
   { ok: true; value: T } | { ok: false; issues: PolicyIssue[] };
 
 const NAME_PATTERN = /^[A-Za-z0-9][\w.-]{0,63}$/;
+// A model ID as AI Gateway names it, such as "@cf/qwen/qwen3.8-27b".
+const MODEL_ID_PATTERN = /^[\w@./:-]{1,128}$/;
+const MAX_CANDIDATES = 10;
 const UNKNOWN_POLICIES: readonly UnknownPolicy[] = [
   "no_match",
   "match",
@@ -72,12 +76,24 @@ export function parsePolicy(input: unknown): Parsed<Policy> {
 }
 
 function readPolicy(input: unknown, issues: PolicyIssue[]): Policy | undefined {
-  const fields = readObject(input, "policy", ["signals", "decisions"], issues);
+  const fields = readObject(
+    input,
+    "policy",
+    ["description", "signals", "models", "decisions"],
+    issues,
+  );
   if (!fields) return undefined;
+  if (
+    fields.description !== undefined &&
+    typeof fields.description !== "string"
+  ) {
+    issues.push({ path: "description", message: "must be text" });
+  }
   const signals =
     fields.signals === undefined
       ? {}
       : readSignals(fields.signals, "signals", issues);
+  const models = readModels(fields.models, "models", issues);
   if (!Array.isArray(fields.decisions) || fields.decisions.length === 0) {
     issues.push({
       path: "decisions",
@@ -90,12 +106,121 @@ function readPolicy(input: unknown, issues: PolicyIssue[]): Policy | undefined {
   );
   checkDecisionSet(decisions, issues);
   if (signals) checkReferences(decisions, signals, issues);
-  return signals && decisions.every((d) => d !== undefined)
+  if (models) checkModelReferences(decisions, models, issues);
+  return signals && models && decisions.every((d) => d !== undefined)
     ? {
-        ...(fields.signals !== undefined && { signals }),
-        decisions: decisions as Decision[],
+        ...(typeof fields.description === "string" && {
+          description: fields.description,
+        }),
+        signals,
+        models,
+        decisions: decisions as RoutedDecision[],
       }
     : undefined;
+}
+
+function readModels(
+  value: unknown,
+  path: string,
+  issues: PolicyIssue[],
+): ModelProfile[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) {
+    issues.push({
+      path,
+      message: "must be a non-empty list of the models decisions may name",
+    });
+    return undefined;
+  }
+  const before = issues.length;
+  const seen = new Map<string, number>();
+  const models = value.map((item, i) => {
+    const model = readModel(item, `${path}[${i}]`, issues);
+    if (!model) return undefined;
+    const first = seen.get(model.id);
+    if (first !== undefined) {
+      issues.push({
+        path: `${path}[${i}].id`,
+        message: `repeats the model of ${path}[${first}]`,
+      });
+    } else {
+      seen.set(model.id, i);
+    }
+    return model;
+  });
+  return issues.length > before ? undefined : (models as ModelProfile[]);
+}
+
+function readModel(
+  value: unknown,
+  path: string,
+  issues: PolicyIssue[],
+): ModelProfile | undefined {
+  const fields = readObject(
+    value,
+    path,
+    ["id", "contextWindow", "tools", "structuredOutput", "vision", "source"],
+    issues,
+  );
+  if (!fields) return undefined;
+  const before = issues.length;
+  if (typeof fields.id !== "string" || !MODEL_ID_PATTERN.test(fields.id)) {
+    issues.push({
+      path: `${path}.id`,
+      message: "must be a model ID as AI Gateway names it",
+    });
+  }
+  const window = fields.contextWindow;
+  if (
+    typeof window !== "number" ||
+    !Number.isSafeInteger(window) ||
+    window <= 0
+  ) {
+    issues.push({
+      path: `${path}.contextWindow`,
+      message: "must be a positive whole number of tokens",
+    });
+  }
+  for (const key of ["tools", "structuredOutput", "vision"] as const) {
+    if (fields[key] !== undefined && typeof fields[key] !== "boolean") {
+      issues.push({
+        path: `${path}.${key}`,
+        message: "must be true or false, or left out when unknown",
+      });
+    }
+  }
+  if (fields.source !== undefined && typeof fields.source !== "string") {
+    issues.push({ path: `${path}.source`, message: "must be text" });
+  }
+  if (issues.length > before) return undefined;
+  return {
+    id: fields.id as string,
+    contextWindow: window as number,
+    ...(fields.tools !== undefined && { tools: fields.tools as boolean }),
+    ...(fields.structuredOutput !== undefined && {
+      structuredOutput: fields.structuredOutput as boolean,
+    }),
+    ...(fields.vision !== undefined && { vision: fields.vision as boolean }),
+    ...(fields.source !== undefined && { source: fields.source as string }),
+  };
+}
+
+/** Every model a decision names must be in the catalogue. */
+function checkModelReferences(
+  decisions: (RoutedDecision | undefined)[],
+  models: readonly ModelProfile[],
+  issues: PolicyIssue[],
+): void {
+  const known = new Set(models.map((model) => model.id));
+  decisions.forEach((decision, i) => {
+    decision?.models.forEach((id, j) => {
+      if (!known.has(id)) {
+        issues.push({
+          path: `decisions[${i}].models[${j}]`,
+          message: `names ${id}, which is not in the models list`,
+        });
+      }
+    });
+  });
 }
 
 function readSignals(
@@ -404,11 +529,11 @@ function readDecision(
   value: unknown,
   path: string,
   issues: PolicyIssue[],
-): Decision | undefined {
+): RoutedDecision | undefined {
   const fields = readObject(
     value,
     path,
-    ["name", "description", "priority", "rules", "onUnknown"],
+    ["name", "description", "priority", "rules", "onUnknown", "models"],
     issues,
   );
   if (!fields) return undefined;
@@ -455,12 +580,39 @@ function readDecision(
     });
   }
 
+  const models = fields.models;
+  if (
+    !Array.isArray(models) ||
+    models.length === 0 ||
+    models.length > MAX_CANDIDATES
+  ) {
+    issues.push({
+      path: `${path}.models`,
+      message: `must list 1 to ${MAX_CANDIDATES} candidate models, tried in order`,
+    });
+  } else {
+    models.forEach((id, j) => {
+      if (typeof id !== "string") {
+        issues.push({
+          path: `${path}.models[${j}]`,
+          message: "must be a model ID",
+        });
+      } else if (models.indexOf(id) !== j) {
+        issues.push({
+          path: `${path}.models[${j}]`,
+          message: `repeats ${id}, which is already a candidate`,
+        });
+      }
+    });
+  }
+
   if (issues.length > before) return undefined;
   return {
     name: fields.name as string,
     priority: fields.priority as number,
     ...(rules && { rules }),
     ...(onUnknown !== undefined && { onUnknown: onUnknown as UnknownPolicy }),
+    models: models as string[],
   };
 }
 

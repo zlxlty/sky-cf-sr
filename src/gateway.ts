@@ -1,4 +1,5 @@
 import type { AutoRouterPolicy, Settings } from "./config.ts";
+import { shortHash } from "./hash.ts";
 
 /** The model name that selects the Auto Router on AI Gateway. */
 export const AUTO_ROUTER_MODEL = "cloudflare/auto";
@@ -70,13 +71,7 @@ export async function configHash(policy: AutoRouterPolicy): Promise<string> {
     deadlineMs: policy.deadlineMs,
     fixedHeaders: FIXED_HEADERS,
   });
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(canonical),
-  );
-  return [...new Uint8Array(digest).slice(0, 8)]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
+  return shortHash(canonical);
 }
 
 export function readDecision(headers: Headers): RoutingDecision {

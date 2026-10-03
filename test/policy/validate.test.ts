@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { parsePolicy, type PolicyIssue } from "../../src/policy/validate.ts";
 
-const DEFAULT = { name: "default", priority: 0 };
+const MODELS = [{ id: "m1", contextWindow: 100000 }];
+const DEFAULT = { name: "default", priority: 0, models: ["m1"] };
 const CODING = {
   name: "coding",
   priority: 10,
+  models: ["m1"],
   rules: {
     operator: "OR",
     conditions: [
@@ -39,6 +41,7 @@ describe("parsePolicy", () => {
   it("accepts a valid policy and returns it typed", () => {
     const result = parsePolicy({
       signals: SIGNALS,
+      models: MODELS,
       decisions: [
         { ...CODING, description: "Coding requests", onUnknown: "no_match" },
         DEFAULT,
@@ -48,6 +51,7 @@ describe("parsePolicy", () => {
       ok: true,
       value: {
         signals: SIGNALS,
+        models: MODELS,
         decisions: [{ ...CODING, onUnknown: "no_match" }, DEFAULT],
       },
     });
@@ -56,6 +60,7 @@ describe("parsePolicy", () => {
   it("does not change its input", () => {
     const input = {
       signals: SIGNALS,
+      models: MODELS,
       decisions: [
         {
           name: "a",
@@ -75,7 +80,12 @@ describe("parsePolicy", () => {
     ["no decisions", { decisions: [] }, "decisions", "non-empty list"],
     [
       "an unknown top-level field",
-      { signals: SIGNALS, decisions: [DEFAULT], strategy: "confidence" },
+      {
+        signals: SIGNALS,
+        models: MODELS,
+        decisions: [DEFAULT],
+        strategy: "confidence",
+      },
       "policy.strategy",
       "not a known field",
     ],
@@ -83,6 +93,7 @@ describe("parsePolicy", () => {
       "a bad decision name",
       {
         signals: SIGNALS,
+        models: MODELS,
         decisions: [{ ...CODING, name: "has space" }, DEFAULT],
       },
       "decisions[0].name",
@@ -90,7 +101,11 @@ describe("parsePolicy", () => {
     ],
     [
       "a fractional priority",
-      { signals: SIGNALS, decisions: [{ ...CODING, priority: 1.5 }, DEFAULT] },
+      {
+        signals: SIGNALS,
+        models: MODELS,
+        decisions: [{ ...CODING, priority: 1.5 }, DEFAULT],
+      },
       "decisions[0].priority",
       "whole number",
     ],
@@ -98,6 +113,7 @@ describe("parsePolicy", () => {
       "an unknown onUnknown value",
       {
         signals: SIGNALS,
+        models: MODELS,
         decisions: [{ ...CODING, onUnknown: "ignore" }, DEFAULT],
       },
       "decisions[0].onUnknown",
@@ -105,13 +121,21 @@ describe("parsePolicy", () => {
     ],
     [
       "onUnknown on the default",
-      { signals: SIGNALS, decisions: [{ ...DEFAULT, onUnknown: "match" }] },
+      {
+        signals: SIGNALS,
+        models: MODELS,
+        decisions: [{ ...DEFAULT, onUnknown: "match" }],
+      },
       "decisions[0].onUnknown",
       "does not apply to the default",
     ],
     [
       "an unknown decision field",
-      { signals: SIGNALS, decisions: [{ ...CODING, tier: 1 }, DEFAULT] },
+      {
+        signals: SIGNALS,
+        models: MODELS,
+        decisions: [{ ...CODING, tier: 1 }, DEFAULT],
+      },
       "decisions[0].tier",
       "not a known field",
     ],
@@ -119,6 +143,7 @@ describe("parsePolicy", () => {
       "an unknown operator",
       {
         signals: SIGNALS,
+        models: MODELS,
         decisions: [
           { ...CODING, rules: { operator: "XOR", conditions: [] } },
           DEFAULT,
@@ -131,6 +156,7 @@ describe("parsePolicy", () => {
       "NOT with two conditions",
       {
         signals: SIGNALS,
+        models: MODELS,
         decisions: [
           {
             ...CODING,
@@ -152,6 +178,7 @@ describe("parsePolicy", () => {
       "an empty AND",
       {
         signals: SIGNALS,
+        models: MODELS,
         decisions: [
           { ...CODING, rules: { operator: "AND", conditions: [] } },
           DEFAULT,
@@ -164,6 +191,7 @@ describe("parsePolicy", () => {
       "a signal without a name",
       {
         signals: SIGNALS,
+        models: MODELS,
         decisions: [{ ...CODING, rules: { type: "keyword" } }, DEFAULT],
       },
       "decisions[0].rules.name",
@@ -173,6 +201,7 @@ describe("parsePolicy", () => {
       "a signal with an extra field",
       {
         signals: SIGNALS,
+        models: MODELS,
         decisions: [
           { ...CODING, rules: { type: "keyword", name: "x", label: "y" } },
           DEFAULT,
@@ -185,6 +214,7 @@ describe("parsePolicy", () => {
       "on_unknown inside the rules",
       {
         signals: SIGNALS,
+        models: MODELS,
         decisions: [
           {
             ...CODING,
@@ -200,6 +230,7 @@ describe("parsePolicy", () => {
       "on_error inside the rules",
       {
         signals: SIGNALS,
+        models: MODELS,
         decisions: [
           {
             ...CODING,
@@ -226,6 +257,7 @@ describe("parsePolicy", () => {
       expect(
         issuesOf({
           signals: SIGNALS,
+          models: MODELS,
           decisions: [CODING, { ...CODING, priority: 20 }, DEFAULT],
         }),
       ).toContainEqual({
@@ -249,6 +281,7 @@ describe("parsePolicy", () => {
       expect(
         parsePolicy({
           signals: SIGNALS,
+          models: MODELS,
           decisions: [CODING, { ...DEFAULT, priority: 10 }],
         }).ok,
       ).toBe(true);
@@ -256,7 +289,7 @@ describe("parsePolicy", () => {
 
     it("requires a default", () => {
       expect(
-        issuesOf({ signals: SIGNALS, decisions: [CODING] }),
+        issuesOf({ signals: SIGNALS, models: MODELS, decisions: [CODING] }),
       ).toContainEqual({
         path: "decisions",
         message: expect.stringContaining("exactly one default"),
@@ -267,7 +300,8 @@ describe("parsePolicy", () => {
       expect(
         issuesOf({
           signals: SIGNALS,
-          decisions: [DEFAULT, { name: "other", priority: 1 }],
+          models: MODELS,
+          decisions: [DEFAULT, { name: "other", priority: 1, models: ["m1"] }],
         }),
       ).toContainEqual({
         path: "decisions[1]",
@@ -281,6 +315,7 @@ describe("parsePolicy", () => {
       expect(
         parsePolicy({
           signals: SIGNALS,
+          models: MODELS,
           decisions: [{ ...CODING, rules: nested(15) }, DEFAULT],
         }).ok,
       ).toBe(true);
@@ -290,6 +325,7 @@ describe("parsePolicy", () => {
       expect(
         issuesOf({
           signals: SIGNALS,
+          models: MODELS,
           decisions: [{ ...CODING, rules: nested(16) }, DEFAULT],
         }),
       ).toContainEqual(
@@ -323,10 +359,11 @@ describe("parsePolicy", () => {
     expect(
       issuesOf({
         signals: SIGNALS,
+        models: MODELS,
         decisions: [
           { ...CODING, name: "bad name", priority: "high" },
-          { name: "x", priority: 1 },
-          { name: "y", priority: 2 },
+          { name: "x", priority: 1, models: ["m1"] },
+          { name: "y", priority: 2, models: ["m1"] },
         ],
       }).map((issue) => issue.path),
     ).toEqual(["decisions[0].name", "decisions[0].priority", "decisions[2]"]);
@@ -336,11 +373,13 @@ describe("parsePolicy", () => {
 describe("signal declarations", () => {
   const withSignals = (signals: unknown, ...decisions: unknown[]) => ({
     signals,
+    models: MODELS,
     decisions: [...decisions, DEFAULT],
   });
   const uses = (type: string, name: string, onUnknown?: string) => ({
     name: "route",
     priority: 1,
+    models: ["m1"],
     rules: { type, name },
     ...(onUnknown && { onUnknown }),
   });
@@ -486,6 +525,7 @@ describe("signal declarations", () => {
     const decision = {
       name: "route",
       priority: 1,
+      models: ["m1"],
       rules: {
         operator: "OR",
         conditions: [
@@ -498,5 +538,109 @@ describe("signal declarations", () => {
     expect(issuesOf(withSignals(signals, decision))).toContainEqual(
       expect.objectContaining({ path: "decisions[0].onUnknown" }),
     );
+  });
+});
+
+describe("the model catalogue and candidates", () => {
+  const policyWith = (models: unknown, decisions: unknown[] = [DEFAULT]) => ({
+    models,
+    decisions,
+  });
+
+  it("keeps known capabilities and leaves unknown ones out", () => {
+    const models = [
+      {
+        id: "@cf/qwen/qwen3.8-27b",
+        contextWindow: 262144,
+        tools: true,
+        source: "catalogue",
+      },
+      { id: "m1", contextWindow: 100000 },
+    ];
+    expect(parsePolicy(policyWith(models))).toMatchObject({
+      ok: true,
+      value: { models },
+    });
+  });
+
+  it.each([
+    ["no catalogue", { decisions: [DEFAULT] }, "models", "non-empty list"],
+    ["an empty catalogue", policyWith([]), "models", "non-empty list"],
+    [
+      "a bad model ID",
+      policyWith([{ id: "has space", contextWindow: 1 }]),
+      "models[0].id",
+      "model ID",
+    ],
+    [
+      "a missing context window",
+      policyWith([{ id: "m1" }]),
+      "models[0].contextWindow",
+      "positive whole number",
+    ],
+    [
+      "a fractional context window",
+      policyWith([{ id: "m1", contextWindow: 1.5 }]),
+      "models[0].contextWindow",
+      "positive whole number",
+    ],
+    [
+      "a capability that is not a boolean",
+      policyWith([{ id: "m1", contextWindow: 1, tools: "yes" }]),
+      "models[0].tools",
+      "left out when unknown",
+    ],
+    [
+      "a repeated model",
+      policyWith([
+        { id: "m1", contextWindow: 1 },
+        { id: "m1", contextWindow: 2 },
+      ]),
+      "models[1].id",
+      "repeats the model of models[0]",
+    ],
+    [
+      "an unknown model field",
+      policyWith([{ id: "m1", contextWindow: 1, price: 3 }]),
+      "models[0].price",
+      "not a known field",
+    ],
+    [
+      "a decision without candidates",
+      policyWith(MODELS, [{ name: "default", priority: 0 }]),
+      "decisions[0].models",
+      "1 to 10",
+    ],
+    [
+      "too many candidates",
+      policyWith(MODELS, [
+        { ...DEFAULT, models: Array.from({ length: 11 }, () => "m1") },
+      ]),
+      "decisions[0].models",
+      "1 to 10",
+    ],
+    [
+      "a repeated candidate",
+      policyWith(
+        [
+          { id: "m1", contextWindow: 1 },
+          { id: "m2", contextWindow: 1 },
+        ],
+        [{ ...DEFAULT, models: ["m1", "m2", "m1"] }],
+      ),
+      "decisions[0].models[2]",
+      "already a candidate",
+    ],
+    [
+      "a candidate outside the catalogue",
+      policyWith(MODELS, [{ ...DEFAULT, models: ["m1", "m9"] }]),
+      "decisions[0].models[1]",
+      "not in the models list",
+    ],
+  ])("rejects %s", (_name, input, path, message) => {
+    expect(issuesOf(input)).toContainEqual({
+      path,
+      message: expect.stringContaining(message),
+    });
   });
 });
