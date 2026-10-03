@@ -1,5 +1,6 @@
 import type { AutoRouterPolicy, Settings } from "./config.ts";
 import { shortHash } from "./hash.ts";
+import { GATEWAY_NAMES } from "./pool.ts";
 
 /** The model name that selects the Auto Router on AI Gateway. */
 export const AUTO_ROUTER_MODEL = "cloudflare/auto";
@@ -54,9 +55,9 @@ export function autoRouterRequest(
 
 /**
  * Builds the request to one named model, through the same Gateway endpoint
- * as the Auto Router. The body is the caller's, written out again with only
- * `model` replaced. The session headers are left out: they are the Auto
- * Router's, and the Gateway documents no use for them on a named model.
+ * as the Auto Router. The body is the caller's, written out again with the
+ * changes in `namedModelBody`. The session headers are left out: they are the
+ * Auto Router's, and the Gateway documents no use for them on a named model.
  */
 export function exactModelRequest(
   settings: Settings,
@@ -67,18 +68,42 @@ export function exactModelRequest(
   return new Request(settings.chatCompletionsUrl, {
     method: "POST",
     headers: gatewayHeaders(settings),
-    // `model` keeps its place among the keys, so only its value changes.
-    body: JSON.stringify({ ...body, model: compatModelName(model) }),
+    body: JSON.stringify(namedModelBody(body, model)),
     signal,
   });
 }
 
 /**
- * The pool names Workers AI models as the Auto Router does, `@cf/...`. The
- * compat endpoint documents `{provider}/{model}` for a named model, which for
- * Workers AI is `workers-ai/@cf/...`.
+ * The caller's body as one named model accepts it, with the keys in their
+ * order. `model` becomes the Gateway's name for the model. OpenAI's models
+ * refuse `max_tokens` when named, though the Auto Router accepts it for them,
+ * so for an OpenAI model it becomes `max_completion_tokens`, or is dropped
+ * when that is also given: then it would not apply anyway.
  */
-function compatModelName(model: string): string {
+function namedModelBody(
+  body: Record<string, unknown>,
+  model: string,
+): Record<string, unknown> {
+  const openAI = model.startsWith("openai/");
+  const hasCompletionLimit = Object.hasOwn(body, "max_completion_tokens");
+  return Object.fromEntries(
+    Object.entries(body).flatMap(([key, value]): [string, unknown][] => {
+      if (key === "model") return [[key, gatewayModelName(model)]];
+      if (key === "max_tokens" && openAI) {
+        return hasCompletionLimit ? [] : [["max_completion_tokens", value]];
+      }
+      return [[key, value]];
+    }),
+  );
+}
+
+/**
+ * The pool names models as the Auto Router does. A call to one named model
+ * uses the compat endpoint's `{provider}/{model}` form, which for Workers AI is
+ * `workers-ai/@cf/...`, and for a few models a different provider ID.
+ */
+function gatewayModelName(model: string): string {
+  if (Object.hasOwn(GATEWAY_NAMES, model)) return GATEWAY_NAMES[model]!;
   return model.startsWith("@cf/") ? `workers-ai/${model}` : model;
 }
 
@@ -110,16 +135,25 @@ export async function configHash(policy: AutoRouterPolicy): Promise<string> {
 
 /**
  * The config hash of an entrypoint that calls one named model: the model, or
- * the version of the policy that chooses it, plus the deadline and the fixed
- * headers. Like `configHash`, it leaves out `logPayloads`, which does not
- * change results.
+ * the version of the policy that chooses it; the name the Gateway gets for
+ * each model it can call; the deadline; and the fixed headers. Like
+ * `configHash`, it leaves out `logPayloads`, which does not change results.
  */
 export async function exactModelConfigHash(
   target: { model: string } | { policyVersion: string },
+  models: readonly string[],
   deadlineMs: number,
 ): Promise<string> {
+  const gatewayNames = Object.fromEntries(
+    models.map((model) => [model, gatewayModelName(model)]),
+  );
   return shortHash(
-    JSON.stringify({ ...target, deadlineMs, fixedHeaders: FIXED_HEADERS }),
+    JSON.stringify({
+      ...target,
+      gatewayNames,
+      deadlineMs,
+      fixedHeaders: FIXED_HEADERS,
+    }),
   );
 }
 

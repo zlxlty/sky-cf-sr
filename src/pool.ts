@@ -14,6 +14,15 @@ export const POOL = [
   "openai/gpt-6-sol",
 ];
 
+/**
+ * Pool models that a call naming one model must name differently from the
+ * Auto Router. Anthropic names Opus 5.5 `claude-opus-5-5`; the Auto Router's
+ * name gets 404 from Anthropic (seen in production on 2026-10-03).
+ */
+export const GATEWAY_NAMES: Readonly<Record<string, string>> = {
+  "anthropic/claude-opus-5.5": "anthropic/claude-opus-5-5",
+};
+
 /** How the deployed Worker calls the Auto Router; bound as `AUTO_ROUTER` in `cloudflare.config.ts`. */
 export const AUTO_ROUTER = {
   allowedModels: POOL,

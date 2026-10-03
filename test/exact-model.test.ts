@@ -14,6 +14,8 @@ import {
 // The two models of the test pool in fixtures.ts.
 const LUNA = "openai/gpt-5.6-luna";
 const OPUS = "anthropic/claude-opus-5.5";
+// Anthropic's own ID for OPUS, from GATEWAY_NAMES in src/pool.ts.
+const OPUS_AT_ANTHROPIC = "anthropic/claude-opus-5-5";
 
 const ROUTING = {
   signals: {
@@ -172,6 +174,71 @@ describe("a direct entrypoint", () => {
     expect(records[0]).toMatchObject({ model: kimi });
   });
 
+  it("names a model by its provider's ID where that differs, and records the pool's name", async () => {
+    const { sent, records, app } = served();
+    const response = await app.fetch(
+      chat({ body: ask(`direct/${OPUS}`, "hi") }),
+      ENV,
+    );
+    await response.text();
+
+    expect(await sentModel(sent[0]!)).toBe(OPUS_AT_ANTHROPIC);
+    expect(response.headers.get("x-vsr-selected-model")).toBe(OPUS);
+    expect(records[0]).toMatchObject({ model: OPUS });
+  });
+
+  it("renames max_tokens to max_completion_tokens for an OpenAI model, in place", async () => {
+    const { sent, app } = served();
+    const body = {
+      model: `direct/${LUNA}`,
+      max_tokens: 20,
+      messages: [{ role: "user", content: "hi" }],
+    };
+    await app.fetch(chat({ body }), ENV);
+
+    const forwarded = (await sent[0]!.json()) as object;
+    expect(forwarded).toEqual({
+      model: LUNA,
+      max_completion_tokens: 20,
+      messages: body.messages,
+    });
+    expect(Object.keys(forwarded)).toEqual([
+      "model",
+      "max_completion_tokens",
+      "messages",
+    ]);
+  });
+
+  it("drops max_tokens for an OpenAI model when max_completion_tokens is also given", async () => {
+    const { sent, app } = served();
+    await app.fetch(
+      chat({
+        // max_tokens comes last, so a wrong rename would win.
+        body: ask(`direct/${LUNA}`, "hi", {
+          max_completion_tokens: 20,
+          max_tokens: 5,
+        }),
+      }),
+      ENV,
+    );
+
+    const forwarded = (await sent[0]!.json()) as Record<string, unknown>;
+    expect(forwarded.max_completion_tokens).toBe(20);
+    expect(Object.hasOwn(forwarded, "max_tokens")).toBe(false);
+  });
+
+  it("keeps max_tokens for a model of another provider", async () => {
+    const { sent, app } = served();
+    await app.fetch(
+      chat({ body: ask(`direct/${OPUS}`, "hi", { max_tokens: 20 }) }),
+      ENV,
+    );
+
+    const forwarded = (await sent[0]!.json()) as Record<string, unknown>;
+    expect(forwarded.max_tokens).toBe(20);
+    expect(Object.hasOwn(forwarded, "max_completion_tokens")).toBe(false);
+  });
+
   it("sends the Worker's own Gateway headers, without the pool or session headers", async () => {
     const { sent, app } = served();
     await app.fetch(
@@ -245,7 +312,7 @@ describe("a policy entrypoint", () => {
       ENV,
     );
 
-    expect(await sentModel(sent[0]!)).toBe(OPUS);
+    expect(await sentModel(sent[0]!)).toBe(OPUS_AT_ANTHROPIC);
     expect(response.headers.get("x-vsr-selected-model")).toBe(OPUS);
     expect(response.headers.get("x-vsr-selected-decision")).toBe("coding");
     expect(response.headers.get("x-vsr-config-hash")).toBe(
@@ -262,7 +329,7 @@ describe("a policy entrypoint", () => {
     );
     await response.text();
 
-    expect(await sentModel(sent[0]!)).toBe(OPUS);
+    expect(await sentModel(sent[0]!)).toBe(OPUS_AT_ANTHROPIC);
     expect(records[0]).toMatchObject({
       event: "model_response",
       model: OPUS,

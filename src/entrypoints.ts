@@ -79,6 +79,7 @@ export function entrypoints(
           model: id,
           configHash: await exactModelConfigHash(
             { model: id },
+            [id],
             settings.deadlineMs,
           ),
         };
@@ -94,6 +95,7 @@ export function entrypoints(
           policy,
           configHash: await exactModelConfigHash(
             { policyVersion: policy.version },
+            [...policy.catalogue.keys()],
             settings.deadlineMs,
           ),
         };

@@ -14,7 +14,10 @@ A Cloudflare Worker that puts an OpenAI-compatible chat endpoint in front of [AI
 
 All three use the same pool of models, the same Gateway endpoint, deadline and log line. Any other model name, including a bare model ID such as `openai/gpt-6-sol`, is refused with `400`, so no caller skips routing by mistake.
 
-The endpoint is the Gateway's [OpenAI-compatible one](https://developers.cloudflare.com/ai-gateway/usage/chat-completion/), which the Auto Router needs. Cloudflare marks it as deprecated for calls to one model, but using it for all three keeps them comparable. On it, a Workers AI model is named `workers-ai/@cf/...`; the Worker adds the prefix, and reports the model by its pool name, `@cf/...`.
+The endpoint is the Gateway's [OpenAI-compatible one](https://developers.cloudflare.com/ai-gateway/usage/chat-completion/), which the Auto Router needs. Cloudflare marks it as deprecated for calls to one model, but using it for all three keeps them comparable. The Auto Router's names for models do not always work when one model is named on that endpoint, so for a policy or direct call the Worker changes two things:
+
+- **The model's name.** A Workers AI model is named `workers-ai/@cf/...`, and a few models need their provider's own ID, such as `anthropic/claude-opus-5-5` for `anthropic/claude-opus-5.5`. These names are in `GATEWAY_NAMES` in [`src/pool.ts`](src/pool.ts). Responses and log lines still use the pool's name.
+- **`max_tokens` for OpenAI models.** They refuse it when named, though the Auto Router accepts it for them. The Worker renames it to `max_completion_tokens`, or drops it when `max_completion_tokens` is also given.
 
 - **The Worker owns the Gateway headers.** It adds its own Gateway credential, and for the Auto Router the list of models it may choose from. The caller's `Authorization` header and any `cf-aig-*` headers are not forwarded.
 - **Sessions.** For `cloudflare/auto`, send `x-session-id` so the Auto Router keeps one model for each turn of a conversation, and optionally `x-turn-id` to mark turns yourself. A turn ID overrides the Auto Router's own turn detection. The other entrypoints record these IDs but do not send them to the Gateway.
@@ -29,7 +32,7 @@ A policy is a JSON file: signals read from the request, such as keywords and the
 - A policy is checked when it is first used, and may name only pool models. An invalid one makes the Worker answer `500`.
 - Its version is a hash of its content, recorded with every request it routes.
 - If no candidate can serve the request, or required evidence is unknown, the request fails with `422` (`no_eligible_model` or `routing_unresolved`). It is never sent to some other model.
-- The Worker writes the body out again with the new `model`. A number in the body that JavaScript cannot hold exactly, such as an integer above 2<sup>53</sup>, changes on the way.
+- The Worker writes the body out again with the changes above. A number in the body that JavaScript cannot hold exactly, such as an integer above 2<sup>53</sup>, changes on the way.
 
 The policies served are listed in [`src/entrypoints.ts`](src/entrypoints.ts). [`policy/starter.json`](policy/starter.json) is an untuned example that exercises each part of the engine.
 
@@ -57,11 +60,11 @@ The Worker implements the response headers and request checks that [sr-bench](ht
 
 Each entrypoint has its own config hash, so a benchmark run can prove which router it measured:
 
-| Entrypoint            | The hash covers                                                      |
-| --------------------- | -------------------------------------------------------------------- |
-| `cloudflare/auto`     | The pool, the date it was pinned, the deadline and the fixed headers |
-| `policy/<name>`       | The policy's version, the deadline and the fixed headers             |
-| `direct/<pool model>` | The model, the deadline and the fixed headers                        |
+| Entrypoint            | The hash covers                                                                           |
+| --------------------- | ----------------------------------------------------------------------------------------- |
+| `cloudflare/auto`     | The pool, the date it was pinned, the deadline and the fixed headers                      |
+| `policy/<name>`       | The policy's version, the Gateway names of its models, the deadline and the fixed headers |
+| `direct/<pool model>` | The model and its Gateway name, the deadline and the fixed headers                        |
 
 ## The log line
 
