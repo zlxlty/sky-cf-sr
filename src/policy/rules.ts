@@ -8,6 +8,8 @@
  * truth value, an `onUnknown` policy on each decision, and a catch-all default.
  */
 
+import type { Signals } from "./signals.ts";
+
 /** A leaf: the evidence for one signal, such as the keyword rule `keyword:code_terms`. */
 export interface SignalRef {
   type: string;
@@ -35,6 +37,8 @@ export interface Decision {
 }
 
 export interface Policy {
+  /** The signals the rules refer to; see `signals.ts`. */
+  signals?: Signals;
   decisions: readonly Decision[];
 }
 

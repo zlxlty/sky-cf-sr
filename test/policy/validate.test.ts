@@ -9,9 +9,16 @@ const CODING = {
     operator: "OR",
     conditions: [
       { type: "keyword", name: "code_terms" },
-      { type: "domain", name: "coding" },
+      { type: "fact", name: "long_prompt" },
     ],
   },
+};
+const SIGNALS = {
+  keyword: [
+    { name: "code_terms", operator: "OR", keywords: ["python", "C++"] },
+    { name: "x", operator: "OR", keywords: ["x"] },
+  ],
+  fact: [{ name: "long_prompt", fact: "contextTokenEstimate", atLeast: 8000 }],
 };
 
 function issuesOf(input: unknown): PolicyIssue[] {
@@ -31,6 +38,7 @@ function nested(depth: number): unknown {
 describe("parsePolicy", () => {
   it("accepts a valid policy and returns it typed", () => {
     const result = parsePolicy({
+      signals: SIGNALS,
       decisions: [
         { ...CODING, description: "Coding requests", onUnknown: "no_match" },
         DEFAULT,
@@ -39,6 +47,7 @@ describe("parsePolicy", () => {
     expect(result).toEqual({
       ok: true,
       value: {
+        signals: SIGNALS,
         decisions: [{ ...CODING, onUnknown: "no_match" }, DEFAULT],
       },
     });
@@ -46,6 +55,7 @@ describe("parsePolicy", () => {
 
   it("does not change its input", () => {
     const input = {
+      signals: SIGNALS,
       decisions: [
         {
           name: "a",
@@ -65,43 +75,50 @@ describe("parsePolicy", () => {
     ["no decisions", { decisions: [] }, "decisions", "non-empty list"],
     [
       "an unknown top-level field",
-      { decisions: [DEFAULT], strategy: "confidence" },
+      { signals: SIGNALS, decisions: [DEFAULT], strategy: "confidence" },
       "policy.strategy",
       "not a known field",
     ],
     [
       "a bad decision name",
-      { decisions: [{ ...CODING, name: "has space" }, DEFAULT] },
+      {
+        signals: SIGNALS,
+        decisions: [{ ...CODING, name: "has space" }, DEFAULT],
+      },
       "decisions[0].name",
       "letters, digits",
     ],
     [
       "a fractional priority",
-      { decisions: [{ ...CODING, priority: 1.5 }, DEFAULT] },
+      { signals: SIGNALS, decisions: [{ ...CODING, priority: 1.5 }, DEFAULT] },
       "decisions[0].priority",
       "whole number",
     ],
     [
       "an unknown onUnknown value",
-      { decisions: [{ ...CODING, onUnknown: "ignore" }, DEFAULT] },
+      {
+        signals: SIGNALS,
+        decisions: [{ ...CODING, onUnknown: "ignore" }, DEFAULT],
+      },
       "decisions[0].onUnknown",
       "must be one of",
     ],
     [
       "onUnknown on the default",
-      { decisions: [{ ...DEFAULT, onUnknown: "match" }] },
+      { signals: SIGNALS, decisions: [{ ...DEFAULT, onUnknown: "match" }] },
       "decisions[0].onUnknown",
       "does not apply to the default",
     ],
     [
       "an unknown decision field",
-      { decisions: [{ ...CODING, tier: 1 }, DEFAULT] },
+      { signals: SIGNALS, decisions: [{ ...CODING, tier: 1 }, DEFAULT] },
       "decisions[0].tier",
       "not a known field",
     ],
     [
       "an unknown operator",
       {
+        signals: SIGNALS,
         decisions: [
           { ...CODING, rules: { operator: "XOR", conditions: [] } },
           DEFAULT,
@@ -113,6 +130,7 @@ describe("parsePolicy", () => {
     [
       "NOT with two conditions",
       {
+        signals: SIGNALS,
         decisions: [
           {
             ...CODING,
@@ -133,6 +151,7 @@ describe("parsePolicy", () => {
     [
       "an empty AND",
       {
+        signals: SIGNALS,
         decisions: [
           { ...CODING, rules: { operator: "AND", conditions: [] } },
           DEFAULT,
@@ -143,13 +162,17 @@ describe("parsePolicy", () => {
     ],
     [
       "a signal without a name",
-      { decisions: [{ ...CODING, rules: { type: "keyword" } }, DEFAULT] },
+      {
+        signals: SIGNALS,
+        decisions: [{ ...CODING, rules: { type: "keyword" } }, DEFAULT],
+      },
       "decisions[0].rules.name",
       "letters, digits",
     ],
     [
       "a signal with an extra field",
       {
+        signals: SIGNALS,
         decisions: [
           { ...CODING, rules: { type: "keyword", name: "x", label: "y" } },
           DEFAULT,
@@ -161,6 +184,7 @@ describe("parsePolicy", () => {
     [
       "on_unknown inside the rules",
       {
+        signals: SIGNALS,
         decisions: [
           {
             ...CODING,
@@ -175,6 +199,7 @@ describe("parsePolicy", () => {
     [
       "on_error inside the rules",
       {
+        signals: SIGNALS,
         decisions: [
           {
             ...CODING,
@@ -199,7 +224,10 @@ describe("parsePolicy", () => {
   describe("the set of decisions", () => {
     it("rejects a repeated name", () => {
       expect(
-        issuesOf({ decisions: [CODING, { ...CODING, priority: 20 }, DEFAULT] }),
+        issuesOf({
+          signals: SIGNALS,
+          decisions: [CODING, { ...CODING, priority: 20 }, DEFAULT],
+        }),
       ).toContainEqual({
         path: "decisions[1].name",
         message: expect.stringContaining("repeats the name of decisions[0]"),
@@ -219,12 +247,17 @@ describe("parsePolicy", () => {
 
     it("lets the default share a priority, since it always ranks last", () => {
       expect(
-        parsePolicy({ decisions: [CODING, { ...DEFAULT, priority: 10 }] }).ok,
+        parsePolicy({
+          signals: SIGNALS,
+          decisions: [CODING, { ...DEFAULT, priority: 10 }],
+        }).ok,
       ).toBe(true);
     });
 
     it("requires a default", () => {
-      expect(issuesOf({ decisions: [CODING] })).toContainEqual({
+      expect(
+        issuesOf({ signals: SIGNALS, decisions: [CODING] }),
+      ).toContainEqual({
         path: "decisions",
         message: expect.stringContaining("exactly one default"),
       });
@@ -232,7 +265,10 @@ describe("parsePolicy", () => {
 
     it("rejects a second default", () => {
       expect(
-        issuesOf({ decisions: [DEFAULT, { name: "other", priority: 1 }] }),
+        issuesOf({
+          signals: SIGNALS,
+          decisions: [DEFAULT, { name: "other", priority: 1 }],
+        }),
       ).toContainEqual({
         path: "decisions[1]",
         message: expect.stringContaining("second default"),
@@ -243,14 +279,19 @@ describe("parsePolicy", () => {
   describe("bounds on the rules", () => {
     it("accepts rules 16 levels deep", () => {
       expect(
-        parsePolicy({ decisions: [{ ...CODING, rules: nested(15) }, DEFAULT] })
-          .ok,
+        parsePolicy({
+          signals: SIGNALS,
+          decisions: [{ ...CODING, rules: nested(15) }, DEFAULT],
+        }).ok,
       ).toBe(true);
     });
 
     it("rejects rules nested deeper than 16 levels", () => {
       expect(
-        issuesOf({ decisions: [{ ...CODING, rules: nested(16) }, DEFAULT] }),
+        issuesOf({
+          signals: SIGNALS,
+          decisions: [{ ...CODING, rules: nested(16) }, DEFAULT],
+        }),
       ).toContainEqual(
         expect.objectContaining({
           message: expect.stringContaining("more than 16 levels"),
@@ -281,6 +322,7 @@ describe("parsePolicy", () => {
   it("reports every problem at once", () => {
     expect(
       issuesOf({
+        signals: SIGNALS,
         decisions: [
           { ...CODING, name: "bad name", priority: "high" },
           { name: "x", priority: 1 },
@@ -288,5 +330,173 @@ describe("parsePolicy", () => {
         ],
       }).map((issue) => issue.path),
     ).toEqual(["decisions[0].name", "decisions[0].priority", "decisions[2]"]);
+  });
+});
+
+describe("signal declarations", () => {
+  const withSignals = (signals: unknown, ...decisions: unknown[]) => ({
+    signals,
+    decisions: [...decisions, DEFAULT],
+  });
+  const uses = (type: string, name: string, onUnknown?: string) => ({
+    name: "route",
+    priority: 1,
+    rules: { type, name },
+    ...(onUnknown && { onUnknown }),
+  });
+  const code = SIGNALS.keyword[0]!;
+
+  it("accepts keyword, fact and external signals", () => {
+    const signals = {
+      ...SIGNALS,
+      fact: [
+        ...SIGNALS.fact,
+        { name: "tools", fact: "hasTools", equals: true },
+        { name: "json", fact: "responseFormat", equals: "json_schema" },
+      ],
+      external: [{ type: "clef", name: "hard" }],
+    };
+    expect(
+      parsePolicy(withSignals(signals, uses("clef", "hard", "no_match"))),
+    ).toMatchObject({ ok: true, value: { signals } });
+  });
+
+  it.each([
+    [
+      "an undeclared signal",
+      withSignals(SIGNALS, uses("keyword", "missing")),
+      "decisions[0].rules",
+      "keyword:missing, which is not declared",
+    ],
+    [
+      "an external signal without onUnknown",
+      withSignals(
+        { external: [{ type: "clef", name: "hard" }] },
+        uses("clef", "hard"),
+      ),
+      "decisions[0].onUnknown",
+      "clef:hard, whose evidence can be unknown",
+    ],
+    [
+      "a repeated signal",
+      withSignals({ keyword: [code, code] }),
+      "signals.keyword[1]",
+      "declares keyword:code_terms again",
+    ],
+    [
+      "an external signal using a local type",
+      withSignals({ external: [{ type: "keyword", name: "x" }] }),
+      "signals.external[0].type",
+      "reserved",
+    ],
+    [
+      "a keyword rule with a method",
+      withSignals({ keyword: [{ ...code, method: "bm25" }] }),
+      "signals.keyword[0].method",
+      "matched literally",
+    ],
+    [
+      "a keyword rule with fuzzy matching",
+      withSignals({ keyword: [{ ...code, fuzzy_match: true }] }),
+      "signals.keyword[0].fuzzy_match",
+      "fuzzy matching",
+    ],
+    [
+      "upstream's case_sensitive spelling",
+      withSignals({ keyword: [{ ...code, case_sensitive: true }] }),
+      "signals.keyword[0].case_sensitive",
+      "caseSensitive",
+    ],
+    [
+      "an unknown keyword operator",
+      withSignals({ keyword: [{ ...code, operator: "NAND" }] }),
+      "signals.keyword[0].operator",
+      "AND, OR or NOR",
+    ],
+    [
+      "no keywords",
+      withSignals({ keyword: [{ ...code, keywords: [] }] }),
+      "signals.keyword[0].keywords",
+      "1 to 200",
+    ],
+    [
+      "a blank keyword",
+      withSignals({ keyword: [{ ...code, keywords: [" "] }] }),
+      "signals.keyword[0].keywords[0]",
+      "not only spaces",
+    ],
+    [
+      "an unknown fact",
+      withSignals({ fact: [{ name: "f", fact: "temperature", atLeast: 1 }] }),
+      "signals.fact[0].fact",
+      "must be one of",
+    ],
+    [
+      "a numeric fact without bounds",
+      withSignals({ fact: [{ name: "f", fact: "messageCount" }] }),
+      "signals.fact[0]",
+      "needs atLeast, atMost or both",
+    ],
+    [
+      "bounds the wrong way round",
+      withSignals({
+        fact: [{ name: "f", fact: "messageCount", atLeast: 5, atMost: 2 }],
+      }),
+      "signals.fact[0].atMost",
+      "not be less than atLeast",
+    ],
+    [
+      "equals on a numeric fact",
+      withSignals({
+        fact: [{ name: "f", fact: "messageCount", atLeast: 1, equals: 2 }],
+      }),
+      "signals.fact[0].equals",
+      "use atLeast or atMost",
+    ],
+    [
+      "a boolean fact compared to text",
+      withSignals({ fact: [{ name: "f", fact: "hasTools", equals: "yes" }] }),
+      "signals.fact[0].equals",
+      "true or false",
+    ],
+    [
+      "bounds on a boolean fact",
+      withSignals({
+        fact: [{ name: "f", fact: "stream", equals: true, atLeast: 1 }],
+      }),
+      "signals.fact[0].atLeast",
+      "use equals",
+    ],
+    [
+      "an unknown response format",
+      withSignals({
+        fact: [{ name: "f", fact: "responseFormat", equals: "xml" }],
+      }),
+      "signals.fact[0].equals",
+      "text, json_object, json_schema",
+    ],
+  ])("rejects %s", (_name, input, path, message) => {
+    expect(issuesOf(input)).toContainEqual({
+      path,
+      message: expect.stringContaining(message),
+    });
+  });
+
+  it("requires onUnknown when an external signal is anywhere in the rules", () => {
+    const decision = {
+      name: "route",
+      priority: 1,
+      rules: {
+        operator: "OR",
+        conditions: [
+          { type: "keyword", name: "x" },
+          { operator: "NOT", conditions: [{ type: "clef", name: "hard" }] },
+        ],
+      },
+    };
+    const signals = { ...SIGNALS, external: [{ type: "clef", name: "hard" }] };
+    expect(issuesOf(withSignals(signals, decision))).toContainEqual(
+      expect.objectContaining({ path: "decisions[0].onUnknown" }),
+    );
   });
 });

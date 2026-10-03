@@ -1,4 +1,21 @@
-import type { Decision, Policy, RuleNode, UnknownPolicy } from "./rules.ts";
+import {
+  isSignal,
+  signalKey,
+  type Decision,
+  type Policy,
+  type RuleNode,
+  type UnknownPolicy,
+} from "./rules.ts";
+import {
+  BOOLEAN_FACTS,
+  LOCAL_SIGNAL_TYPES,
+  NUMERIC_FACTS,
+  RESPONSE_FORMATS,
+  type ExternalSignal,
+  type FactSignal,
+  type KeywordSignal,
+  type Signals,
+} from "./signals.ts";
 
 /** One problem in a policy, located by a path such as `decisions[1].rules.conditions[0]`. */
 export interface PolicyIssue {
@@ -25,6 +42,19 @@ const LEGACY_RULE_FIELDS: Record<string, string> = {
   on_error:
     "is not supported, because it treats a failure as false even under NOT; use the decision's onUnknown",
 };
+// Upstream keyword-rule fields with no equivalent here.
+const UNSUPPORTED_KEYWORD_FIELDS: Record<string, string> = {
+  method:
+    "is not supported; keywords are matched literally, and regex, BM25 and n-gram matching are not available",
+  fuzzy_match: "is not supported; fuzzy matching is not available",
+  fuzzy_threshold: "is not supported; fuzzy matching is not available",
+  bm25_threshold: "is not supported; BM25 matching is not available",
+  ngram_threshold: "is not supported; n-gram matching is not available",
+  ngram_arity: "is not supported; n-gram matching is not available",
+  case_sensitive: "is written caseSensitive here",
+};
+const MAX_KEYWORDS = 200;
+const MAX_KEYWORD_LENGTH = 200;
 // Bounds on a decision's rule tree, so evaluation cost stays small and predictable.
 const MAX_RULE_DEPTH = 16;
 const MAX_RULE_NODES = 256;
@@ -42,8 +72,12 @@ export function parsePolicy(input: unknown): Parsed<Policy> {
 }
 
 function readPolicy(input: unknown, issues: PolicyIssue[]): Policy | undefined {
-  const fields = readObject(input, "policy", ["decisions"], issues);
+  const fields = readObject(input, "policy", ["signals", "decisions"], issues);
   if (!fields) return undefined;
+  const signals =
+    fields.signals === undefined
+      ? {}
+      : readSignals(fields.signals, "signals", issues);
   if (!Array.isArray(fields.decisions) || fields.decisions.length === 0) {
     issues.push({
       path: "decisions",
@@ -55,9 +89,315 @@ function readPolicy(input: unknown, issues: PolicyIssue[]): Policy | undefined {
     readDecision(value, `decisions[${i}]`, issues),
   );
   checkDecisionSet(decisions, issues);
-  return decisions.every((d) => d !== undefined)
-    ? { decisions: decisions as Decision[] }
+  if (signals) checkReferences(decisions, signals, issues);
+  return signals && decisions.every((d) => d !== undefined)
+    ? {
+        ...(fields.signals !== undefined && { signals }),
+        decisions: decisions as Decision[],
+      }
     : undefined;
+}
+
+function readSignals(
+  value: unknown,
+  path: string,
+  issues: PolicyIssue[],
+): Signals | undefined {
+  const fields = readObject(
+    value,
+    path,
+    ["keyword", "fact", "external"],
+    issues,
+  );
+  if (!fields) return undefined;
+  const before = issues.length;
+  const keyword = readList(
+    fields.keyword,
+    `${path}.keyword`,
+    issues,
+    readKeywordSignal,
+  );
+  const fact = readList(fields.fact, `${path}.fact`, issues, readFactSignal);
+  const external = readList(
+    fields.external,
+    `${path}.external`,
+    issues,
+    readExternalSignal,
+  );
+  const seen = new Map<string, string>();
+  const lists: [
+    string,
+    readonly ({ name: string; type?: string } | undefined)[],
+  ][] = [
+    ["keyword", keyword ?? []],
+    ["fact", fact ?? []],
+    ["external", external ?? []],
+  ];
+  for (const [list, items] of lists) {
+    items.forEach((item, i) => {
+      if (!item) return;
+      const key = `${item.type ?? list}:${item.name}`;
+      const itemPath = `${path}.${list}[${i}]`;
+      const first = seen.get(key);
+      if (first !== undefined) {
+        issues.push({
+          path: itemPath,
+          message: `declares ${key} again; ${first} already does`,
+        });
+      } else {
+        seen.set(key, itemPath);
+      }
+    });
+  }
+  if (issues.length > before) return undefined;
+  return {
+    ...(keyword && { keyword: keyword as KeywordSignal[] }),
+    ...(fact && { fact: fact as FactSignal[] }),
+    ...(external && { external: external as ExternalSignal[] }),
+  };
+}
+
+function readList<T>(
+  value: unknown,
+  path: string,
+  issues: PolicyIssue[],
+  read: (item: unknown, path: string, issues: PolicyIssue[]) => T | undefined,
+): (T | undefined)[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    issues.push({ path, message: "must be a list" });
+    return undefined;
+  }
+  return value.map((item, i) => read(item, `${path}[${i}]`, issues));
+}
+
+function readKeywordSignal(
+  value: unknown,
+  path: string,
+  issues: PolicyIssue[],
+): KeywordSignal | undefined {
+  const fields = readObject(
+    value,
+    path,
+    ["name", "operator", "keywords", "caseSensitive"],
+    issues,
+    UNSUPPORTED_KEYWORD_FIELDS,
+  );
+  if (!fields) return undefined;
+  const before = issues.length;
+  checkName(fields.name, `${path}.name`, issues);
+  const { operator, keywords, caseSensitive } = fields;
+  if (operator !== "AND" && operator !== "OR" && operator !== "NOR") {
+    issues.push({
+      path: `${path}.operator`,
+      message: "must be AND, OR or NOR",
+    });
+  }
+  if (
+    !Array.isArray(keywords) ||
+    keywords.length === 0 ||
+    keywords.length > MAX_KEYWORDS
+  ) {
+    issues.push({
+      path: `${path}.keywords`,
+      message: `must be a list of 1 to ${MAX_KEYWORDS} keywords`,
+    });
+  } else {
+    keywords.forEach((keyword, i) => {
+      if (
+        typeof keyword !== "string" ||
+        keyword.trim() === "" ||
+        keyword.length > MAX_KEYWORD_LENGTH
+      ) {
+        issues.push({
+          path: `${path}.keywords[${i}]`,
+          message: `must be text of 1 to ${MAX_KEYWORD_LENGTH} characters, not only spaces`,
+        });
+      }
+    });
+  }
+  if (caseSensitive !== undefined && typeof caseSensitive !== "boolean") {
+    issues.push({
+      path: `${path}.caseSensitive`,
+      message: "must be true or false",
+    });
+  }
+  if (issues.length > before) return undefined;
+  return {
+    name: fields.name as string,
+    operator: operator as KeywordSignal["operator"],
+    keywords: keywords as string[],
+    ...(caseSensitive !== undefined && {
+      caseSensitive: caseSensitive as boolean,
+    }),
+  };
+}
+
+function readFactSignal(
+  value: unknown,
+  path: string,
+  issues: PolicyIssue[],
+): FactSignal | undefined {
+  const fields = readObject(
+    value,
+    path,
+    ["name", "fact", "atLeast", "atMost", "equals"],
+    issues,
+  );
+  if (!fields) return undefined;
+  const before = issues.length;
+  checkName(fields.name, `${path}.name`, issues);
+  const { fact, atLeast, atMost, equals } = fields;
+  const name = fields.name as string;
+
+  if (NUMERIC_FACTS.includes(fact as never)) {
+    for (const [key, bound] of [
+      ["atLeast", atLeast],
+      ["atMost", atMost],
+    ] as const) {
+      if (
+        bound !== undefined &&
+        (typeof bound !== "number" || !Number.isFinite(bound))
+      ) {
+        issues.push({ path: `${path}.${key}`, message: "must be a number" });
+      }
+    }
+    if (atLeast === undefined && atMost === undefined) {
+      issues.push({ path, message: `${fact} needs atLeast, atMost or both` });
+    }
+    if (
+      typeof atLeast === "number" &&
+      typeof atMost === "number" &&
+      atLeast > atMost
+    ) {
+      issues.push({
+        path: `${path}.atMost`,
+        message: "must not be less than atLeast",
+      });
+    }
+    if (equals !== undefined) {
+      issues.push({
+        path: `${path}.equals`,
+        message: `does not apply to ${fact}; use atLeast or atMost`,
+      });
+    }
+    if (issues.length > before) return undefined;
+    return {
+      name,
+      fact: fact as FactSignal["fact"] & string,
+      ...(atLeast !== undefined && { atLeast: atLeast as number }),
+      ...(atMost !== undefined && { atMost: atMost as number }),
+    } as FactSignal;
+  }
+
+  const isBoolean = BOOLEAN_FACTS.includes(fact as never);
+  if (!isBoolean && fact !== "responseFormat") {
+    issues.push({
+      path: `${path}.fact`,
+      message: `must be one of ${[...NUMERIC_FACTS, ...BOOLEAN_FACTS, "responseFormat"].join(", ")}`,
+    });
+    return undefined;
+  }
+  for (const key of ["atLeast", "atMost"] as const) {
+    if (fields[key] !== undefined) {
+      issues.push({
+        path: `${path}.${key}`,
+        message: `does not apply to ${fact}; use equals`,
+      });
+    }
+  }
+  if (isBoolean && typeof equals !== "boolean") {
+    issues.push({ path: `${path}.equals`, message: "must be true or false" });
+  }
+  if (!isBoolean && !RESPONSE_FORMATS.includes(equals as never)) {
+    issues.push({
+      path: `${path}.equals`,
+      message: `must be one of ${RESPONSE_FORMATS.join(", ")}`,
+    });
+  }
+  if (issues.length > before) return undefined;
+  return { name, fact, equals } as FactSignal;
+}
+
+function readExternalSignal(
+  value: unknown,
+  path: string,
+  issues: PolicyIssue[],
+): ExternalSignal | undefined {
+  const fields = readObject(value, path, ["type", "name"], issues);
+  if (!fields) return undefined;
+  const before = issues.length;
+  checkName(fields.type, `${path}.type`, issues);
+  checkName(fields.name, `${path}.name`, issues);
+  if (LOCAL_SIGNAL_TYPES.includes(fields.type as string)) {
+    issues.push({
+      path: `${path}.type`,
+      message: `is reserved for signals the policy evaluates itself; declare them under signals.${fields.type as string}`,
+    });
+  }
+  if (issues.length > before) return undefined;
+  return { type: fields.type as string, name: fields.name as string };
+}
+
+/**
+ * Every signal a rule refers to must be declared, and a decision that refers
+ * to an external signal must say what unknown evidence means for it.
+ */
+function checkReferences(
+  decisions: (Decision | undefined)[],
+  signals: Signals,
+  issues: PolicyIssue[],
+): void {
+  const declared = new Set<string>([
+    ...(signals.keyword ?? []).map((s) => `keyword:${s.name}`),
+    ...(signals.fact ?? []).map((s) => `fact:${s.name}`),
+  ]);
+  const external = new Set(
+    (signals.external ?? []).map((s) => `${s.type}:${s.name}`),
+  );
+  decisions.forEach((decision, i) => {
+    if (!decision?.rules) return;
+    const usesExternal: string[] = [];
+    walkSignals(decision.rules, `decisions[${i}].rules`, (key, path) => {
+      if (external.has(key)) usesExternal.push(key);
+      else if (!declared.has(key)) {
+        issues.push({
+          path,
+          message: `refers to ${key}, which is not declared in signals`,
+        });
+      }
+    });
+    if (usesExternal.length > 0 && decision.onUnknown === undefined) {
+      issues.push({
+        path: `decisions[${i}].onUnknown`,
+        message: `is required, because the rules use ${[...new Set(usesExternal)].join(", ")}, whose evidence can be unknown`,
+      });
+    }
+  });
+}
+
+function walkSignals(
+  node: RuleNode,
+  path: string,
+  visit: (key: string, path: string) => void,
+): void {
+  if (isSignal(node)) {
+    visit(signalKey(node), path);
+    return;
+  }
+  node.conditions.forEach((child, i) =>
+    walkSignals(child, `${path}.conditions[${i}]`, visit),
+  );
+}
+
+function checkName(value: unknown, path: string, issues: PolicyIssue[]): void {
+  if (typeof value !== "string" || !NAME_PATTERN.test(value)) {
+    issues.push({
+      path,
+      message:
+        "must be 1 to 64 letters, digits, '.', '_' or '-', starting with a letter or digit",
+    });
+  }
 }
 
 function readDecision(
