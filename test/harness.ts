@@ -1,5 +1,6 @@
 import { createApp } from "../src/app.ts";
 import type { Deps, RequestRecord } from "../src/chat.ts";
+import type { AiBinding } from "../src/gateway.ts";
 
 export const CHAT = {
   model: "cloudflare/auto",
@@ -43,6 +44,35 @@ export function gateway(
     expire,
     app: createApp(deps, policies),
   };
+}
+
+/**
+ * A stand-in for the Worker's AI binding that records what it was asked. A
+ * test puts `binding` in the environment as `AI`.
+ */
+export function aiBinding(
+  respond: (signal: AbortSignal) => Response | Promise<Response> = () =>
+    Response.json({ ok: true }),
+) {
+  const calls: {
+    model: string;
+    inputs: Record<string, unknown>;
+    options: Parameters<AiBinding["run"]>[2];
+  }[] = [];
+  const binding: AiBinding = {
+    run: async (model, inputs, options) => {
+      calls.push({ model, inputs, options });
+      return respond(options.signal);
+    },
+  };
+  return { calls, binding };
+}
+
+/** A binding call that never answers; it fails only when its signal aborts. */
+export function hangOn(signal: AbortSignal): Promise<Response> {
+  return new Promise((_, reject) =>
+    signal.addEventListener("abort", () => reject(signal.reason)),
+  );
 }
 
 /** A Gateway response that never arrives; it fails only when its request is aborted. */

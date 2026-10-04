@@ -3,12 +3,14 @@ import { readSettings } from "../src/config.ts";
 import { entrypoints } from "../src/entrypoints.ts";
 import { ENV } from "./fixtures.ts";
 import {
+  aiBinding,
   chat,
   errorCode,
   event,
   eventStream,
   gateway,
   hang,
+  hangOn,
 } from "./harness.ts";
 
 // The two models of the test pool in fixtures.ts.
@@ -65,6 +67,25 @@ const POLICIES = {
 };
 
 const SETTINGS = await readSettings(ENV);
+
+// A model the compat endpoint does not serve when it is named; see
+// VIA_AI_BINDING in src/pool.ts.
+const GLM = "fireworks/glm-5.3";
+const VIA_BINDING = {
+  routing: {
+    models: [{ id: GLM, contextWindow: 100000 }],
+    decisions: [{ name: "default", priority: 0, models: [GLM] }],
+  },
+};
+
+/** The test environment with GLM in the pool and the given AI binding. */
+function withBinding(ai: unknown, policy: object = {}) {
+  return {
+    ...ENV,
+    AUTO_ROUTER: { ...ENV.AUTO_ROUTER, allowedModels: [GLM, LUNA], ...policy },
+    AI: ai,
+  };
+}
 
 /** The fake Gateway, serving the test policies. */
 function served(respond?: (request: Request) => Response | Promise<Response>) {
@@ -172,24 +193,6 @@ describe("a direct entrypoint", () => {
     expect(await sentModel(sent[0]!)).toBe(`workers-ai/${kimi}`);
     expect(response.headers.get("x-vsr-selected-model")).toBe(kimi);
     expect(records[0]).toMatchObject({ model: kimi });
-  });
-
-  it("names an xAI model under the compat endpoint's provider name, and records the pool's name", async () => {
-    const grok = "xai/grok-4.6";
-    const env = {
-      ...ENV,
-      AUTO_ROUTER: { ...ENV.AUTO_ROUTER, allowedModels: [grok, LUNA] },
-    };
-    const { sent, records, app } = served();
-    const response = await app.fetch(
-      chat({ body: ask(`direct/${grok}`, "hi") }),
-      env,
-    );
-    await response.text();
-
-    expect(await sentModel(sent[0]!)).toBe("grok/grok-4.6");
-    expect(response.headers.get("x-vsr-selected-model")).toBe(grok);
-    expect(records[0]).toMatchObject({ model: grok });
   });
 
   it("names a model by its provider's ID where that differs, and records the pool's name", async () => {
@@ -665,5 +668,191 @@ describe("the exact-model path shares the pass-through's call handling", () => {
       msTotal: 30,
       ended: "complete",
     });
+  });
+});
+
+describe("a model the compat endpoint does not serve", () => {
+  it("is called through the AI binding, under the pool's name, with the caller's body", async () => {
+    const ai = aiBinding();
+    const { sent, app } = served();
+    const body = {
+      model: `direct/${GLM}`,
+      max_tokens: 20,
+      messages: [{ role: "user", content: "hi" }],
+      stream: true,
+    };
+    const response = await app.fetch(chat({ body }), withBinding(ai.binding));
+    await response.text();
+
+    expect(sent).toHaveLength(0);
+    expect(ai.calls).toHaveLength(1);
+    const { model: _named, ...rest } = body;
+    expect(ai.calls[0]!.model).toBe(GLM);
+    expect(ai.calls[0]!.inputs).toEqual(rest);
+    expect(Object.keys(ai.calls[0]!.inputs)).toEqual(Object.keys(rest));
+    expect(response.headers.get("x-vsr-selected-model")).toBe(GLM);
+  });
+
+  it("goes through the same Gateway, with no cached answer, one attempt and the raw response", async () => {
+    const ai = aiBinding();
+    const { app } = served();
+    await app.fetch(
+      chat({ body: ask(`direct/${GLM}`, "hi") }),
+      withBinding(ai.binding),
+    );
+
+    expect(ai.calls[0]!.options).toMatchObject({
+      // The last part of AIG_GATEWAY_URL in fixtures.ts.
+      gateway: {
+        id: "gateway",
+        skipCache: true,
+        collectLog: true,
+        retries: { maxAttempts: 1 },
+      },
+      returnRawResponse: true,
+    });
+  });
+
+  it("is not logged by the Gateway when payloads are not logged", async () => {
+    const ai = aiBinding();
+    const { app } = served();
+    await app.fetch(
+      chat({ body: ask(`direct/${GLM}`, "hi") }),
+      withBinding(ai.binding, { logPayloads: false }),
+    );
+
+    expect(ai.calls[0]!.options.gateway.collectLog).toBe(false);
+  });
+
+  it("relays the binding's response, and records it as any model's", async () => {
+    const ai = aiBinding(() =>
+      Response.json(
+        { error: "busy" },
+        { status: 429, headers: { "cf-aig-request-id": "request-4" } },
+      ),
+    );
+    const { records, app } = served();
+    const response = await app.fetch(
+      chat({ body: ask(`direct/${GLM}`, "hi") }),
+      withBinding(ai.binding),
+    );
+
+    expect(response.status).toBe(429);
+    expect(await response.json()).toEqual({ error: "busy" });
+    expect(response.headers.get("cf-aig-request-id")).toBe("request-4");
+    expect(records).toEqual([
+      expect.objectContaining({
+        event: "model_response",
+        model: GLM,
+        status: 429,
+        gatewayRequestId: "request-4",
+      }),
+    ]);
+  });
+
+  it("is called through the binding when a policy chooses it", async () => {
+    const ai = aiBinding();
+    const { sent, app } = gateway(undefined, VIA_BINDING);
+    const response = await app.fetch(
+      chat({ body: ask("policy/routing", "hi") }),
+      withBinding(ai.binding),
+    );
+
+    expect(sent).toHaveLength(0);
+    expect(ai.calls.map((call) => call.model)).toEqual([GLM]);
+    expect(response.headers.get("x-vsr-selected-decision")).toBe("default");
+  });
+
+  it("leaves the other models on the compat endpoint", async () => {
+    const ai = aiBinding();
+    const { sent, app } = served();
+    await app.fetch(
+      chat({ body: ask(`direct/${LUNA}`, "hi") }),
+      withBinding(ai.binding),
+    );
+
+    expect(ai.calls).toHaveLength(0);
+    expect(sent).toHaveLength(1);
+  });
+
+  it("gives up at the deadline", async () => {
+    const ai = aiBinding(hangOn);
+    const { records, expire, app } = served();
+    const pending = app.fetch(
+      chat({ body: ask(`direct/${GLM}`, "hi") }),
+      withBinding(ai.binding),
+    );
+    await vi.waitFor(() => expect(ai.calls).toHaveLength(1));
+
+    expire();
+    const response = await pending;
+
+    expect(ai.calls[0]!.options.signal.aborted).toBe(true);
+    expect(response.status).toBe(504);
+    expect(records).toEqual([
+      expect.objectContaining({
+        event: "gateway_no_response",
+        model: GLM,
+        reason: "timeout",
+      }),
+    ]);
+  });
+
+  it("answers 502 without retrying when the binding fails", async () => {
+    const ai = aiBinding(() => {
+      throw new Error("binding failed");
+    });
+    const { records, app } = served();
+    const response = await app.fetch(
+      chat({ body: ask(`direct/${GLM}`, "hi") }),
+      withBinding(ai.binding),
+    );
+
+    expect(response.status).toBe(502);
+    expect(ai.calls).toHaveLength(1);
+    expect(records).toEqual([
+      expect.objectContaining({
+        event: "gateway_no_response",
+        model: GLM,
+        reason: "network",
+      }),
+    ]);
+  });
+
+  it("has a config hash that differs from the same model's on the compat endpoint", async () => {
+    const settings = await readSettings(withBinding(aiBinding().binding));
+    const viaBinding = await entrypoints().resolve(`direct/${GLM}`, settings);
+    const viaEndpoint = await entrypoints().resolve(`direct/${LUNA}`, settings);
+
+    expect(viaBinding?.configHash).toMatch(/^[0-9a-f]{16}$/);
+    expect(viaBinding?.configHash).not.toBe(viaEndpoint?.configHash);
+  });
+
+  it.each([
+    ["the AI binding is missing", { AI: undefined }],
+    ["the binding has no run method", { AI: {} }],
+    [
+      "the Gateway's URL does not end with its ID",
+      { AIG_GATEWAY_URL: "https://gateway.ai.cloudflare.com" },
+    ],
+  ])("answers 500 when %s", async (_name, change) => {
+    const { app } = served();
+    const response = await app.fetch(
+      chat({ body: ask(`direct/${GLM}`, "hi") }),
+      { ...withBinding(aiBinding().binding), ...change },
+    );
+
+    expect(response.status).toBe(500);
+    expect(await errorCode(response)).toBe("misconfigured");
+  });
+
+  it("needs no AI binding when the pool has no such model", async () => {
+    const { app } = served();
+    const response = await app.fetch(
+      chat({ body: ask(`direct/${LUNA}`, "hi") }),
+      ENV,
+    );
+
+    expect(response.status).toBe(200);
   });
 });

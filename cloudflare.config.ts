@@ -18,6 +18,9 @@ export default defineConfig({
       AIG_TOKEN: bindings.secret(),
       CLIENT_TOKEN: bindings.secret(),
       AUTO_ROUTER: bindings.json(AUTO_ROUTER),
+      // Calls pool models that the Gateway's compat endpoint does not serve when
+      // named; see VIA_AI_BINDING in src/pool.ts. It has no local stand-in.
+      AI: bindings.ai({ dev: { remote: true } }),
     },
   },
 });

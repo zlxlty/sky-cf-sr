@@ -1,6 +1,6 @@
 import type { AutoRouterPolicy, Settings } from "./config.ts";
 import { shortHash } from "./hash.ts";
-import { GATEWAY_NAMES } from "./pool.ts";
+import { GATEWAY_NAMES, VIA_AI_BINDING } from "./pool.ts";
 
 /** The model name that selects the Auto Router on AI Gateway. */
 export const AUTO_ROUTER_MODEL = "cloudflare/auto";
@@ -73,6 +73,60 @@ export function exactModelRequest(
   });
 }
 
+/** The part of the Worker's AI binding that this Worker uses. */
+export interface AiBinding {
+  run(
+    model: string,
+    inputs: Record<string, unknown>,
+    options: {
+      gateway: {
+        id: string;
+        skipCache: boolean;
+        collectLog: boolean;
+        retries: { maxAttempts: number };
+      };
+      /** The provider's response as it is, with its status and headers. */
+      returnRawResponse: true;
+      signal: AbortSignal;
+    },
+  ): Promise<Response>;
+}
+
+/** Whether a call that names this model goes through the AI binding; see `VIA_AI_BINDING`. */
+export function usesAiBinding(model: string): boolean {
+  return VIA_AI_BINDING.includes(model);
+}
+
+/**
+ * Calls one named model through the Worker's AI binding, for the models the
+ * compat endpoint does not serve. The request goes through the same Gateway,
+ * under unified billing, with the settings the fixed headers give a call to
+ * the endpoint: no cached answer and one attempt. The model is named apart
+ * from the body, so `model` is left out of it; nothing else changes.
+ *
+ * The binding has no setting for the Gateway to log a request without its
+ * text. So when `logPayloads` is off, such a call is not logged at all.
+ */
+export function aiBindingCall(
+  settings: Settings,
+  model: string,
+  body: Record<string, unknown>,
+  signal: AbortSignal,
+): Promise<Response> {
+  const { model: _named, ...inputs } = body;
+  // `readSettings` has checked both for a pool that has such a model.
+  return settings.ai!.run(model, inputs, {
+    gateway: {
+      id: settings.gatewayId!,
+      skipCache: true,
+      collectLog: settings.logPayloads,
+      retries: { maxAttempts: 1 },
+    },
+    returnRawResponse: true,
+    signal,
+  });
+}
+
 /**
  * The caller's body as one named model accepts it, with the keys in their
  * order. `model` becomes the Gateway's name for the model. OpenAI's models
@@ -135,9 +189,10 @@ export async function configHash(policy: AutoRouterPolicy): Promise<string> {
 
 /**
  * The config hash of an entrypoint that calls one named model: the model, or
- * the version of the policy that chooses it; the name the Gateway gets for
- * each model it can call; the deadline; and the fixed headers. Like
- * `configHash`, it leaves out `logPayloads`, which does not change results.
+ * the version of the policy that chooses it; how each model it can call is
+ * reached, by the name the Gateway gets or through the AI binding; the
+ * deadline; and the fixed headers. Like `configHash`, it leaves out
+ * `logPayloads`, which does not change results.
  */
 export async function exactModelConfigHash(
   target: { model: string } | { policyVersion: string },
@@ -145,7 +200,10 @@ export async function exactModelConfigHash(
   deadlineMs: number,
 ): Promise<string> {
   const gatewayNames = Object.fromEntries(
-    models.map((model) => [model, gatewayModelName(model)]),
+    models.map((model) => [
+      model,
+      usesAiBinding(model) ? `ai-binding:${model}` : gatewayModelName(model),
+    ]),
   );
   return shortHash(
     JSON.stringify({

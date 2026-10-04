@@ -12,11 +12,12 @@ A Cloudflare Worker that puts an OpenAI-compatible chat endpoint in front of [AI
 | `policy/<name>`, such as `policy/starter`                | A routing policy in [`policy/`](policy/), run by the Worker | The request with `model` set to the policy's choice |
 | `direct/<pool model>`, such as `direct/openai/gpt-6-sol` | Nobody: that model answers                                  | The request with `model` set to that model          |
 
-All three use the same pool of models, the same Gateway endpoint, deadline and log line. Any other model name, including a bare model ID such as `openai/gpt-6-sol`, is refused with `400`, so no caller skips routing by mistake.
+All three use the same pool of models, the same Gateway, deadline and log line. Any other model name, including a bare model ID such as `openai/gpt-6-sol`, is refused with `400`, so no caller skips routing by mistake.
 
-The endpoint is the Gateway's [OpenAI-compatible one](https://developers.cloudflare.com/ai-gateway/usage/chat-completion/), which the Auto Router needs. Cloudflare marks it as deprecated for calls to one model, but using it for all three keeps them comparable. The Auto Router's names for models do not always work when one model is named on that endpoint, so for a policy or direct call the Worker changes two things:
+The endpoint is the Gateway's [OpenAI-compatible one](https://developers.cloudflare.com/ai-gateway/usage/chat-completion/), which the Auto Router needs. Cloudflare marks it as deprecated for calls to one model, but using it for all three keeps them comparable. The Auto Router's names for models do not always work when one model is named on that endpoint, so for a policy or direct call the Worker changes three things:
 
-- **The model's name.** A Workers AI model is named `workers-ai/@cf/...`. A few models need another name, kept in `GATEWAY_NAMES` in [`src/pool.ts`](src/pool.ts): their provider's own ID, such as `anthropic/claude-opus-5-5` for `anthropic/claude-opus-5.5`, or the endpoint's name for the provider, such as `grok/grok-4.6` for `xai/grok-4.6`. Responses and log lines still use the pool's name. The pool's two Fireworks models are sent under their pool names: Fireworks is not among the endpoint's documented providers, so whether it serves them is known only from a call.
+- **The model's name.** A Workers AI model is named `workers-ai/@cf/...`, and a few models need their provider's own ID, such as `anthropic/claude-opus-5-5` for `anthropic/claude-opus-5.5`. These names are in `GATEWAY_NAMES` in [`src/pool.ts`](src/pool.ts). Responses and log lines still use the pool's name.
+- **The way in, for models the endpoint does not serve.** The Auto Router can choose the pool's Fireworks and xAI models, but the endpoint refuses a call that names one: Fireworks is not one of its providers, and for xAI it supplies no key under unified billing. A call that names one of them goes through the Worker's [AI binding](https://developers.cloudflare.com/ai-gateway/usage/worker-binding-methods/) instead, which takes every model of Cloudflare's catalogue under the Auto Router's name. It goes through the same Gateway, under unified billing, with no cached answer and one attempt, and the response comes back in the same format. These models are listed in `VIA_AI_BINDING` in `src/pool.ts`. Anthropic's models answer in Anthropic's own format on that path, so they stay on the endpoint.
 - **`max_tokens` for OpenAI models.** They refuse it when named, though the Auto Router accepts it for them. The Worker renames it to `max_completion_tokens`, or drops it when `max_completion_tokens` is also given.
 
 - **The Worker owns the Gateway headers.** It adds its own Gateway credential, and for the Auto Router the list of models it may choose from. The caller's `Authorization` header and any `cf-aig-*` headers are not forwarded.
@@ -60,11 +61,11 @@ The Worker implements the response headers and request checks that [sr-bench](ht
 
 Each entrypoint has its own config hash, so a benchmark run can prove which router it measured:
 
-| Entrypoint            | The hash covers                                                                           |
-| --------------------- | ----------------------------------------------------------------------------------------- |
-| `cloudflare/auto`     | The pool, the date it was pinned, the deadline and the fixed headers                      |
-| `policy/<name>`       | The policy's version, the Gateway names of its models, the deadline and the fixed headers |
-| `direct/<pool model>` | The model and its Gateway name, the deadline and the fixed headers                        |
+| Entrypoint            | The hash covers                                                                            |
+| --------------------- | ------------------------------------------------------------------------------------------ |
+| `cloudflare/auto`     | The pool, the date it was pinned, the deadline and the fixed headers                       |
+| `policy/<name>`       | The policy's version, how each of its models is called, the deadline and the fixed headers |
+| `direct/<pool model>` | The model and how it is called, the deadline and the fixed headers                         |
 
 ## The log line
 
@@ -97,6 +98,8 @@ Secrets:
 | `AIG_GATEWAY_URL` | Your gateway's base URL: `https://gateway.ai.cloudflare.com/v1/<account id>/<gateway id>`. It must use HTTPS, except for a local stand-in |
 | `AIG_TOKEN`       | A Cloudflare API token with the AI Gateway Run permission                                                                                 |
 | `CLIENT_TOKEN`    | The bearer token callers of this Worker must present. Letters, digits and `. _ ~ + / -` only; the output of `openssl rand -hex 32` fits   |
+
+`AI`, the Workers AI binding, bound in `cloudflare.config.ts`. It needs no token: Cloudflare supplies the providers' credentials. The Worker needs it only while the pool has a model in `VIA_AI_BINDING`, and then `AIG_GATEWAY_URL` must end with the Gateway's ID. When `logPayloads` is off, the Gateway does not log a call made through the binding at all: the binding can turn a request's log off, but not only its text.
 
 `AUTO_ROUTER`, set in `src/pool.ts` and bound in `cloudflare.config.ts`. Despite its name, all but `poolPinnedOn` apply to every entrypoint:
 

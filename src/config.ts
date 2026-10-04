@@ -1,4 +1,5 @@
-import { configHash } from "./gateway.ts";
+import { configHash, type AiBinding } from "./gateway.ts";
+import { VIA_AI_BINDING } from "./pool.ts";
 
 /** The Worker's bindings before validation; see `cloudflare.config.ts`. */
 export interface RawEnv {
@@ -6,6 +7,7 @@ export interface RawEnv {
   AIG_TOKEN?: unknown;
   CLIENT_TOKEN?: unknown;
   AUTO_ROUTER?: unknown;
+  AI?: unknown;
 }
 
 /**
@@ -31,6 +33,12 @@ export interface Settings extends AutoRouterPolicy {
   /** The Gateway's OpenAI-compatible Chat Completions URL. */
   chatCompletionsUrl: string;
   gatewayToken: string;
+  /**
+   * The AI binding and the Gateway's ID, for calls that name a model the
+   * compat endpoint does not serve. Both are set when the pool has such a model.
+   */
+  ai: AiBinding | null;
+  gatewayId: string | null;
   /** The bearer token callers of this Worker must present. */
   clientToken: string;
   /** The `cloudflare/auto` entrypoint's config hash; see `configHash` in `gateway.ts`. */
@@ -53,10 +61,27 @@ const LOCAL_HOSTS = ["localhost", "127.0.0.1"];
 
 export async function readSettings(env: RawEnv): Promise<Settings> {
   const policy = autoRouterPolicy(env.AUTO_ROUTER);
+  const gateway = gatewayUrl(env.AIG_GATEWAY_URL);
+  const ai = aiBinding(env.AI);
+  const gatewayId = gateway.pathname.split("/").filter(Boolean).at(-1) ?? null;
+  if (policy.allowedModels.some((model) => VIA_AI_BINDING.includes(model))) {
+    if (ai === null) {
+      throw new ConfigError(
+        "AI is not bound, and the pool has a model that is called through it",
+      );
+    }
+    if (gatewayId === null) {
+      throw new ConfigError(
+        "AIG_GATEWAY_URL must end with the Gateway's ID: the pool has a model that is called through the AI binding",
+      );
+    }
+  }
   return {
     ...policy,
-    chatCompletionsUrl: chatCompletionsUrl(env.AIG_GATEWAY_URL),
+    chatCompletionsUrl: `${gateway.origin}${gateway.pathname.replace(/\/+$/, "")}/compat/chat/completions`,
     gatewayToken: required(env.AIG_TOKEN, "AIG_TOKEN"),
+    ai,
+    gatewayId,
     clientToken: clientToken(env.CLIENT_TOKEN),
     configHash: await configHash(policy),
   };
@@ -114,7 +139,16 @@ function clientToken(value: unknown): string {
   return token;
 }
 
-function chatCompletionsUrl(value: unknown): string {
+function aiBinding(value: unknown): AiBinding | null {
+  const bound =
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { run?: unknown }).run === "function";
+  return bound ? (value as AiBinding) : null;
+}
+
+/** The Gateway's base URL, which ends with the account's ID and the Gateway's. */
+function gatewayUrl(value: unknown): URL {
   const url = URL.parse(required(value, "AIG_GATEWAY_URL"));
   // The Gateway token is sent to this URL, so only a local stand-in may use plain HTTP.
   const secure =
@@ -132,5 +166,5 @@ function chatCompletionsUrl(value: unknown): string {
       "AIG_GATEWAY_URL must be an https URL without a query, fragment or credentials",
     );
   }
-  return `${url.origin}${url.pathname.replace(/\/+$/, "")}/compat/chat/completions`;
+  return url;
 }

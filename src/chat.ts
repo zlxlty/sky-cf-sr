@@ -2,10 +2,12 @@ import type { Settings } from "./config.ts";
 import type { Entrypoints } from "./entrypoints.ts";
 import { errorResponse } from "./errors.ts";
 import {
+  aiBindingCall,
   autoRouterRequest,
   exactModelRequest,
   readDecision,
   relayResponse,
+  usesAiBinding,
   type RoutingDecision,
   type SessionIdentity,
 } from "./gateway.ts";
@@ -156,14 +158,13 @@ export async function handleChat(
       return callGateway(request, settings, deps, record, {
         model: null,
         // The original bytes are forwarded, so the Gateway sees exactly what the caller sent.
-        outbound: (signal) =>
-          autoRouterRequest(settings, body, identity, signal),
+        send: (signal) =>
+          deps.fetch(autoRouterRequest(settings, body, identity, signal)),
       });
     case "direct":
       return callGateway(request, settings, deps, record, {
         model: entrypoint.model,
-        outbound: (signal) =>
-          exactModelRequest(settings, entrypoint.model, parsed, signal),
+        send: namedModelCall(settings, deps, entrypoint.model, parsed),
       });
     case "policy": {
       const result = routeRequest(entrypoint.policy, parsed);
@@ -175,8 +176,7 @@ export async function handleChat(
       return callGateway(request, settings, deps, routed, {
         model: result.model,
         decision: result.decision,
-        outbound: (signal) =>
-          exactModelRequest(settings, result.model, parsed, signal),
+        send: namedModelCall(settings, deps, result.model, parsed),
       });
     }
   }
@@ -186,7 +186,22 @@ export async function handleChat(
 interface Call {
   model: string | null;
   decision?: string;
-  outbound: (signal: AbortSignal) => Request;
+  send: (signal: AbortSignal) => Promise<Response>;
+}
+
+/**
+ * How one named model is called: through the Gateway's compat endpoint, or
+ * through the AI binding for the models that endpoint does not serve.
+ */
+function namedModelCall(
+  settings: Settings,
+  deps: Deps,
+  model: string,
+  body: Record<string, unknown>,
+): Call["send"] {
+  return usesAiBinding(model)
+    ? (signal) => aiBindingCall(settings, model, body, signal)
+    : (signal) => deps.fetch(exactModelRequest(settings, model, body, signal));
 }
 
 /**
@@ -205,9 +220,7 @@ async function callGateway(
   const elapsed = () => deps.now() - started;
   let upstream: Response;
   try {
-    upstream = await deps.fetch(
-      call.outbound(AbortSignal.any([request.signal, deadline])),
-    );
+    upstream = await call.send(AbortSignal.any([request.signal, deadline]));
   } catch (error) {
     const reason = deadline.aborted
       ? "timeout"
