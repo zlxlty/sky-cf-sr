@@ -54,14 +54,6 @@
       "source": "OpenRouter models API, 2026-10-03, for Z.ai's own endpoint; Fireworks' limits not checked"
     },
     {
-      "id": "xai/grok-4.6",
-      "contextWindow": 500000,
-      "tools": true,
-      "structuredOutput": true,
-      "vision": true,
-      "source": "OpenRouter models API, 2026-10-03"
-    },
-    {
       "id": "openai/gpt-6-sol",
       "contextWindow": 1050000,
       "tools": true,

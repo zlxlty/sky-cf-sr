@@ -9,7 +9,6 @@ export const POOL = [
   "openai/gpt-6-luna",
   "fireworks/glm-5.3-flash",
   "fireworks/glm-5.3",
-  "xai/grok-4.6",
   "openai/gpt-6-sol",
   "anthropic/claude-opus-5.5",
 ];
@@ -26,18 +25,19 @@ export const GATEWAY_NAMES: Readonly<Record<string, string>> = {
 
 /**
  * Pool models that the compat endpoint does not serve when one is named,
- * though the Auto Router can choose them (seen in production on 2026-10-04):
- * - Fireworks is not one of that endpoint's providers: 400 "Invalid provider";
- * - for xAI it supplies no key under unified billing: 401 "No credentials
- *   presented", for the name `grok/grok-4.6`.
+ * though the Auto Router can choose them: Fireworks is not one of that
+ * endpoint's providers, and it answers 400 "Invalid provider" (seen in
+ * production on 2026-10-04).
  *
  * A call that names one of these goes through the Worker's AI binding, which
  * takes every model of Cloudflare's catalogue under the Auto Router's name.
+ * A model of xAI would need the same: while `xai/grok-4.6` was in the pool,
+ * the endpoint answered 401 "No credentials presented" for `grok/grok-4.6`,
+ * and the binding served it.
  */
 export const VIA_AI_BINDING: readonly string[] = [
   "fireworks/glm-5.3-flash",
   "fireworks/glm-5.3",
-  "xai/grok-4.6",
 ];
 
 /** How the deployed Worker calls the Auto Router; bound as `AUTO_ROUTER` in `cloudflare.config.ts`. */
