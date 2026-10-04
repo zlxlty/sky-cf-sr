@@ -30,7 +30,7 @@
   },
   "models": [
     {
-      "id": "openai/gpt-5.6-luna",
+      "id": "openai/gpt-6-luna",
       "contextWindow": 1050000,
       "tools": true,
       "structuredOutput": true,
@@ -38,29 +38,24 @@
       "source": "OpenRouter models API, 2026-10-03"
     },
     {
-      "id": "@cf/google/gemma-4-26b-a4b-it",
-      "contextWindow": 256000,
+      "id": "fireworks/glm-5.3-flash",
+      "contextWindow": 1048576,
       "tools": true,
+      "structuredOutput": true,
       "vision": true,
-      "source": "Workers AI model catalogue (cf ai models list), 2026-10-03; structured output not listed"
+      "source": "OpenRouter models API, 2026-10-03, for Z.ai's own endpoint; Fireworks' limits not checked"
     },
     {
-      "id": "@cf/qwen/qwen3.8-27b",
-      "contextWindow": 262144,
+      "id": "fireworks/glm-5.3",
+      "contextWindow": 1048576,
       "tools": true,
-      "vision": true,
-      "source": "Workers AI model catalogue (cf ai models list), 2026-10-03; structured output not listed"
+      "structuredOutput": true,
+      "vision": false,
+      "source": "OpenRouter models API, 2026-10-03, for Z.ai's own endpoint; Fireworks' limits not checked"
     },
     {
-      "id": "@cf/moonshotai/kimi-k2.7-code",
-      "contextWindow": 262144,
-      "tools": true,
-      "vision": true,
-      "source": "Workers AI model catalogue (cf ai models list), 2026-10-03; structured output not listed"
-    },
-    {
-      "id": "anthropic/claude-opus-5.5",
-      "contextWindow": 1000000,
+      "id": "xai/grok-4.6",
+      "contextWindow": 500000,
       "tools": true,
       "structuredOutput": true,
       "vision": true,
@@ -73,26 +68,40 @@
       "structuredOutput": true,
       "vision": true,
       "source": "OpenRouter models API, 2026-10-03"
+    },
+    {
+      "id": "anthropic/claude-opus-5.5",
+      "contextWindow": 1000000,
+      "tools": true,
+      "structuredOutput": true,
+      "vision": true,
+      "source": "OpenRouter models API, 2026-10-03"
     }
   ],
   "decisions": [
     {
       "name": "long-context",
       "priority": 20,
-      "rules": { "type": "fact", "name": "long_context" },
-      "models": ["openai/gpt-5.6-luna", "openai/gpt-6-sol"]
+      "rules": {
+        "type": "fact",
+        "name": "long_context"
+      },
+      "models": ["openai/gpt-6-luna", "openai/gpt-6-sol"]
     },
     {
       "name": "coding",
       "priority": 10,
-      "rules": { "type": "keyword", "name": "code_terms" },
+      "rules": {
+        "type": "keyword",
+        "name": "code_terms"
+      },
       "onUnknown": "no_match",
-      "models": ["@cf/moonshotai/kimi-k2.7-code", "openai/gpt-6-sol"]
+      "models": ["fireworks/glm-5.3", "openai/gpt-6-sol"]
     },
     {
       "name": "default",
       "priority": 0,
-      "models": ["openai/gpt-5.6-luna", "openai/gpt-6-sol"]
+      "models": ["openai/gpt-6-luna", "openai/gpt-6-sol"]
     }
   ]
 }

@@ -220,28 +220,26 @@ describe("the starter policy", () => {
       "a short question",
       ask("What is the capital of France?"),
       "default",
-      "openai/gpt-5.6-luna",
+      "openai/gpt-6-luna",
     ],
     [
       "a coding question",
       ask("Why does my python script crash?"),
       "coding",
-      "@cf/moonshotai/kimi-k2.7-code",
+      "fireworks/glm-5.3",
     ],
     [
       "a long document",
       ask("x".repeat(500_000)),
       "long-context",
-      "openai/gpt-5.6-luna",
+      "openai/gpt-6-luna",
     ],
     [
-      "a coding question asking for a JSON schema",
-      ask("Refactor this SQL", {
-        response_format: {
-          type: "json_schema",
-          json_schema: { name: "s", schema: {} },
-        },
-      }),
+      "a coding question with a screenshot",
+      ask([
+        { type: "text", text: "Refactor this SQL" },
+        { type: "image_url", image_url: { url: "x" } },
+      ]),
       "coding",
       "openai/gpt-6-sol",
     ],

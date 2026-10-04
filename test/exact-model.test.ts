@@ -174,6 +174,24 @@ describe("a direct entrypoint", () => {
     expect(records[0]).toMatchObject({ model: kimi });
   });
 
+  it("names an xAI model under the compat endpoint's provider name, and records the pool's name", async () => {
+    const grok = "xai/grok-4.6";
+    const env = {
+      ...ENV,
+      AUTO_ROUTER: { ...ENV.AUTO_ROUTER, allowedModels: [grok, LUNA] },
+    };
+    const { sent, records, app } = served();
+    const response = await app.fetch(
+      chat({ body: ask(`direct/${grok}`, "hi") }),
+      env,
+    );
+    await response.text();
+
+    expect(await sentModel(sent[0]!)).toBe("grok/grok-4.6");
+    expect(response.headers.get("x-vsr-selected-model")).toBe(grok);
+    expect(records[0]).toMatchObject({ model: grok });
+  });
+
   it("names a model by its provider's ID where that differs, and records the pool's name", async () => {
     const { sent, records, app } = served();
     const response = await app.fetch(
