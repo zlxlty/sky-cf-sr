@@ -40,6 +40,21 @@ export const VIA_AI_BINDING: readonly string[] = [
   "fireworks/glm-5.3",
 ];
 
+/**
+ * Pool models that read a repeated prompt from their cache only when the
+ * calls that share it carry the same cache key. With no key, each of six
+ * calls with one long prefix was billed at the full price; with one, every
+ * call after the first read the prefix and was billed at 19% of it (seen in
+ * production on 2026-10-04).
+ *
+ * OpenAI's models take the same key and read nothing with or without it, and
+ * Opus reads nothing on the compat endpoint, so neither is listed.
+ */
+export const CACHE_KEY_MODELS: readonly string[] = [
+  "fireworks/glm-5.3-flash",
+  "fireworks/glm-5.3",
+];
+
 /** How the deployed Worker calls the Auto Router; bound as `AUTO_ROUTER` in `cloudflare.config.ts`. */
 export const AUTO_ROUTER = {
   allowedModels: POOL,

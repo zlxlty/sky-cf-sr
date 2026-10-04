@@ -8,6 +8,7 @@ import {
   readDecision,
   relayResponse,
   usesAiBinding,
+  withSessionCacheKey,
   type RoutingDecision,
   type SessionIdentity,
 } from "./gateway.ts";
@@ -164,7 +165,13 @@ export async function handleChat(
     case "direct":
       return callGateway(request, settings, deps, record, {
         model: entrypoint.model,
-        send: namedModelCall(settings, deps, entrypoint.model, parsed),
+        send: await namedModelCall(
+          settings,
+          deps,
+          entrypoint.model,
+          parsed,
+          identity,
+        ),
       });
     case "policy": {
       const result = routeRequest(entrypoint.policy, parsed);
@@ -176,7 +183,13 @@ export async function handleChat(
       return callGateway(request, settings, deps, routed, {
         model: result.model,
         decision: result.decision,
-        send: namedModelCall(settings, deps, result.model, parsed),
+        send: await namedModelCall(
+          settings,
+          deps,
+          result.model,
+          parsed,
+          identity,
+        ),
       });
     }
   }
@@ -191,17 +204,21 @@ interface Call {
 
 /**
  * How one named model is called: through the Gateway's compat endpoint, or
- * through the AI binding for the models that endpoint does not serve.
+ * through the AI binding for the models that endpoint does not serve. The
+ * body is the caller's, with a cache key for the session where the model
+ * needs one to read from its cache.
  */
-function namedModelCall(
+async function namedModelCall(
   settings: Settings,
   deps: Deps,
   model: string,
   body: Record<string, unknown>,
-): Call["send"] {
+  identity: SessionIdentity,
+): Promise<Call["send"]> {
+  const sent = await withSessionCacheKey(body, model, identity.sessionId);
   return usesAiBinding(model)
-    ? (signal) => aiBindingCall(settings, model, body, signal)
-    : (signal) => deps.fetch(exactModelRequest(settings, model, body, signal));
+    ? (signal) => aiBindingCall(settings, model, sent, signal)
+    : (signal) => deps.fetch(exactModelRequest(settings, model, sent, signal));
 }
 
 /**

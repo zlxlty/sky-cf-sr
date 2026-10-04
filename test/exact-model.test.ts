@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readSettings } from "../src/config.ts";
 import { entrypoints } from "../src/entrypoints.ts";
+import { exactModelConfigHash } from "../src/gateway.ts";
+import { shortHash } from "../src/hash.ts";
 import { ENV } from "./fixtures.ts";
 import {
   aiBinding,
@@ -854,5 +856,130 @@ describe("a model the compat endpoint does not serve", () => {
     );
 
     expect(response.status).toBe(200);
+  });
+});
+
+describe("a session's calls to a model that needs a cache key", () => {
+  /** The inputs the binding gets for one direct call to GLM. */
+  async function inputsFor(
+    headers: Record<string, string>,
+    extra: object = {},
+  ): Promise<Record<string, unknown>> {
+    const ai = aiBinding();
+    const { app } = served();
+    await app.fetch(
+      chat({ body: ask(`direct/${GLM}`, "hi", extra), headers }),
+      withBinding(ai.binding),
+    );
+    return ai.calls[0]!.inputs;
+  }
+
+  it("carry one key, made from the session ID and not equal to it", async () => {
+    const first = await inputsFor({ "x-session-id": "session-1" });
+    const second = await inputsFor({
+      "x-session-id": "session-1",
+      "x-turn-id": "turn-2",
+    });
+
+    expect(first.prompt_cache_key).toMatch(/^session-[0-9a-f]{16}$/);
+    expect(first.prompt_cache_key).not.toContain("session-1");
+    expect(second.prompt_cache_key).toBe(first.prompt_cache_key);
+    // The key comes last: the caller's own fields keep their order.
+    expect(Object.keys(first)).toEqual(["messages", "prompt_cache_key"]);
+  });
+
+  it("carry another key in another session", async () => {
+    const first = await inputsFor({ "x-session-id": "session-1" });
+    const other = await inputsFor({ "x-session-id": "session-2" });
+
+    expect(other.prompt_cache_key).not.toBe(first.prompt_cache_key);
+  });
+
+  it("carry no key when the caller names no session", async () => {
+    expect(await inputsFor({})).not.toHaveProperty("prompt_cache_key");
+  });
+
+  it.each([
+    ["its own key", { prompt_cache_key: "mine" }],
+    ["a user, which such a model uses the same way", { user: "someone" }],
+  ])("are left as they are when the caller sends %s", async (_name, own) => {
+    const inputs = await inputsFor({ "x-session-id": "session-1" }, own);
+
+    expect(inputs).toEqual({
+      messages: [{ role: "user", content: "hi" }],
+      ...own,
+    });
+  });
+
+  it("carry the key when a policy chooses the model", async () => {
+    const ai = aiBinding();
+    const { app } = gateway(undefined, VIA_BINDING);
+    await app.fetch(
+      chat({
+        body: ask("policy/routing", "hi"),
+        headers: { "x-session-id": "session-1" },
+      }),
+      withBinding(ai.binding),
+    );
+
+    expect(ai.calls[0]!.inputs.prompt_cache_key).toMatch(/^session-/);
+  });
+
+  it("is not added for a model that is not listed as needing one", async () => {
+    const { sent, app } = served();
+    await app.fetch(
+      chat({
+        body: ask(`direct/${LUNA}`, "hi"),
+        headers: { "x-session-id": "session-1" },
+      }),
+      ENV,
+    );
+
+    expect(await sent[0]!.json()).toEqual(ask(LUNA, "hi"));
+  });
+
+  it("is not added to a request for the Auto Router, which goes as the caller sent it", async () => {
+    const ai = aiBinding();
+    const { sent, app } = served();
+    const body = JSON.stringify(ask("cloudflare/auto", "hi"));
+    await app.fetch(
+      chat({ body, headers: { "x-session-id": "session-1" } }),
+      withBinding(ai.binding),
+    );
+
+    expect(await sent[0]!.text()).toBe(body);
+    expect(sent[0]!.headers.get("cf-aig-session-id")).toBe("session-1");
+  });
+
+  it("is part of the config hash of an entrypoint that can call such a model, and of no other", async () => {
+    const env = withBinding(aiBinding().binding);
+    const settings = await readSettings(env);
+    const hash = (target: object, models: string[]) =>
+      exactModelConfigHash(
+        target as { model: string },
+        models,
+        settings.deadlineMs,
+      );
+
+    // What the hashes were before a session's cache key existed.
+    const before = async (target: object, names: Record<string, string>) =>
+      shortHash(
+        JSON.stringify({
+          ...target,
+          gatewayNames: names,
+          deadlineMs: settings.deadlineMs,
+          fixedHeaders: {
+            "cf-aig-skip-cache": "true",
+            "cf-aig-max-attempts": "1",
+          },
+        }),
+      );
+
+    expect(await hash({ model: GLM }, [GLM])).not.toBe(
+      await before({ model: GLM }, { [GLM]: `ai-binding:${GLM}` }),
+    );
+    expect(await hash({ model: LUNA }, [LUNA])).toBe(
+      await before({ model: LUNA }, { [LUNA]: LUNA }),
+    );
   });
 });

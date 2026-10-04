@@ -1,6 +1,6 @@
 import type { AutoRouterPolicy, Settings } from "./config.ts";
 import { shortHash } from "./hash.ts";
-import { GATEWAY_NAMES, VIA_AI_BINDING } from "./pool.ts";
+import { CACHE_KEY_MODELS, GATEWAY_NAMES, VIA_AI_BINDING } from "./pool.ts";
 
 /** The model name that selects the Auto Router on AI Gateway. */
 export const AUTO_ROUTER_MODEL = "cloudflare/auto";
@@ -12,6 +12,9 @@ const FIXED_HEADERS = {
   // The Worker makes one generation call; the Gateway must not add retries.
   "cf-aig-max-attempts": "1",
 };
+
+/** The body field that a provider takes as the key of its prompt cache. */
+const CACHE_KEY = "prompt_cache_key";
 
 /** Which session and turn a request belongs to, as supplied by the caller. */
 export interface SessionIdentity {
@@ -71,6 +74,33 @@ export function exactModelRequest(
     body: JSON.stringify(namedModelBody(body, model)),
     signal,
   });
+}
+
+/**
+ * The caller's body with a cache key for its session, for a model that reads
+ * from its cache only when given one; see `CACHE_KEY_MODELS`. Any other body
+ * comes back as it is.
+ *
+ * The key is a hash of the session ID: every call of a session carries the
+ * same key, and the provider does not get the caller's own ID. A body that
+ * already has a key, or a `user`, which such a model uses the same way, is
+ * the caller's choice and is kept. A call with no session gets no key: the
+ * Worker knows of no later call that shares its prompt.
+ */
+export async function withSessionCacheKey(
+  body: Record<string, unknown>,
+  model: string,
+  sessionId: string | null,
+): Promise<Record<string, unknown>> {
+  if (
+    sessionId === null ||
+    !CACHE_KEY_MODELS.includes(model) ||
+    Object.hasOwn(body, CACHE_KEY) ||
+    Object.hasOwn(body, "user")
+  ) {
+    return body;
+  }
+  return { ...body, [CACHE_KEY]: `session-${await shortHash(sessionId)}` };
 }
 
 /** The part of the Worker's AI binding that this Worker uses. */
@@ -190,9 +220,9 @@ export async function configHash(policy: AutoRouterPolicy): Promise<string> {
 /**
  * The config hash of an entrypoint that calls one named model: the model, or
  * the version of the policy that chooses it; how each model it can call is
- * reached, by the name the Gateway gets or through the AI binding; the
- * deadline; and the fixed headers. Like `configHash`, it leaves out
- * `logPayloads`, which does not change results.
+ * reached, by the name the Gateway gets or through the AI binding; which of
+ * them get a session's cache key; the deadline; and the fixed headers. Like
+ * `configHash`, it leaves out `logPayloads`, which does not change results.
  */
 export async function exactModelConfigHash(
   target: { model: string } | { policyVersion: string },
@@ -205,12 +235,15 @@ export async function exactModelConfigHash(
       usesAiBinding(model) ? `ai-binding:${model}` : gatewayModelName(model),
     ]),
   );
+  const cacheKeyed = models.filter((model) => CACHE_KEY_MODELS.includes(model));
   return shortHash(
     JSON.stringify({
       ...target,
       gatewayNames,
       deadlineMs,
       fixedHeaders: FIXED_HEADERS,
+      // Left out when no model gets a key, so such an entrypoint keeps its hash.
+      ...(cacheKeyed.length > 0 && { sessionCacheKey: cacheKeyed }),
     }),
   );
 }
