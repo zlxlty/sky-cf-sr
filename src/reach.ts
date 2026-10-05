@@ -35,6 +35,33 @@ export const ANTHROPIC_FORMAT: readonly string[] = [
 ];
 
 /**
+ * Pool models that the binding takes and answers in OpenAI's Responses
+ * format, for a call with tools at an effort other than "none". Seen in
+ * production on 2026-10-05: in the Chat Completions format these models
+ * refuse a tool together with a reasoning effort ("Function tools with
+ * reasoning_effort are not supported ... To use function tools, use
+ * /v1/responses or set reasoning_effort to 'none'"), on the compat endpoint
+ * and through the binding alike, and a call with tools that sets no effort is
+ * refused too. In the Responses format the binding serves a call with tools
+ * at every effort, and the effort is applied.
+ *
+ * Only the calls that the endpoint refuses go this way. A call with no tools,
+ * and a call with tools at the effort "none", stay on the endpoint, so no
+ * call that the endpoint serves changes. A call that goes this way is
+ * translated both ways; see `src/responses.ts`.
+ *
+ * On this path a conversation that grows is read from the cache by the next
+ * call at the same effort, and what is read is billed at about a tenth of
+ * the full price. A call at another effort read nothing from it, and the
+ * call after that, at the first effort again, read the cache again: seen
+ * once, in four calls, on 2026-10-05.
+ */
+export const RESPONSES_FORMAT_WITH_TOOLS: readonly string[] = [
+  "openai/gpt-6-luna",
+  "openai/gpt-6-sol",
+];
+
+/**
  * Pool models that get a session's cache key. The key is for calls whose
  * prompts start alike and end differently, such as several questions about
  * one long document. In production on 2026-10-04, with no key GLM 5.3 read

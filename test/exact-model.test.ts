@@ -1218,3 +1218,307 @@ describe("a model the binding takes in Anthropic's format", () => {
     expect(hash).not.toBe(inOpenAIFormat);
   });
 });
+
+describe("a call with tools and an effort, to a model the binding takes in the Responses format", () => {
+  // See RESPONSES_FORMAT_WITH_TOOLS in src/reach.ts.
+  const GPT6_LUNA = "openai/gpt-6-luna";
+  const GPT6_SOL = "openai/gpt-6-sol";
+  const TOOL = {
+    type: "function",
+    function: {
+      name: "bash",
+      description: "Execute a bash command",
+      parameters: { type: "object", properties: { command: {} } },
+    },
+  };
+  const VIA_POLICY = {
+    routing: {
+      models: [{ id: GPT6_LUNA, contextWindow: 100000, tools: true }],
+      decisions: [{ name: "default", priority: 0, models: [GPT6_LUNA] }],
+    },
+  };
+
+  /** The test environment with the two GPT-6 models in the pool and the given AI binding. */
+  function withGpt6(ai: unknown) {
+    return {
+      ...ENV,
+      AUTO_ROUTER: {
+        ...ENV.AUTO_ROUTER,
+        allowedModels: [GPT6_LUNA, GPT6_SOL, LUNA],
+      },
+      AI: ai,
+    };
+  }
+
+  /** The model's answer "OK", as the binding streams it. */
+  function ok(): Response {
+    const events = [
+      {
+        type: "response.created",
+        response: { id: "resp_1", model: "gpt-6-luna" },
+      },
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: { type: "message" },
+      },
+      { type: "response.output_text.delta", output_index: 0, delta: "OK" },
+      {
+        type: "response.completed",
+        response: { usage: { input_tokens: 9, output_tokens: 2 } },
+      },
+    ];
+    const text = events
+      .map(
+        (event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+      )
+      .join("");
+    return new Response(text, {
+      headers: {
+        "content-type": "text/event-stream",
+        "cf-aig-request-id": "r1",
+      },
+    });
+  }
+
+  it("goes through the binding, with the body translated", async () => {
+    const ai = aiBinding(ok);
+    const { sent, app } = served();
+    const response = await app.fetch(
+      chat({
+        body: ask(`direct/${GPT6_LUNA}`, "hi", {
+          max_tokens: 20,
+          reasoning_effort: "high",
+          tools: [TOOL],
+        }),
+      }),
+      withGpt6(ai.binding),
+    );
+    await response.text();
+
+    expect(sent).toHaveLength(0);
+    expect(ai.calls).toHaveLength(1);
+    expect(ai.calls[0]!.model).toBe(GPT6_LUNA);
+    expect(ai.calls[0]!.inputs).toEqual({
+      input: [{ role: "user", content: "hi" }],
+      max_output_tokens: 20,
+      reasoning: { effort: "high" },
+      tools: [
+        {
+          type: "function",
+          name: "bash",
+          description: "Execute a bash command",
+          parameters: { type: "object", properties: { command: {} } },
+          strict: false,
+        },
+      ],
+      store: false,
+      stream: true,
+    });
+    expect(ai.calls[0]!.options.gateway).toMatchObject({
+      id: "gateway",
+      skipCache: true,
+      retries: { maxAttempts: 1 },
+    });
+  });
+
+  it.each([
+    [GPT6_LUNA, "no effort", {}],
+    [GPT6_LUNA, "the effort low", { reasoning_effort: "low" }],
+    [GPT6_SOL, "the effort high", { reasoning_effort: "high" }],
+    [GPT6_SOL, "an effort of null", { reasoning_effort: null }],
+  ])("goes through the binding for %s with %s", async (model, _name, extra) => {
+    const ai = aiBinding(ok);
+    const { sent, app } = served();
+    await app.fetch(
+      chat({ body: ask(`direct/${model}`, "hi", { tools: [TOOL], ...extra }) }),
+      withGpt6(ai.binding),
+    );
+
+    expect(sent).toHaveLength(0);
+    expect(ai.calls).toHaveLength(1);
+    expect(ai.calls[0]!.model).toBe(model);
+    expect(ai.calls[0]!.inputs.tools).toHaveLength(1);
+  });
+
+  // The endpoint serves these, so they stay as they were.
+  it.each([
+    ["no tools", { reasoning_effort: "high" }],
+    ["an empty list of tools", { reasoning_effort: "high", tools: [] }],
+    ["tools at the effort none", { reasoning_effort: "none", tools: [TOOL] }],
+  ])("stays on the compat endpoint with %s", async (_name, extra) => {
+    const ai = aiBinding(ok);
+    const { sent, app } = served();
+    await app.fetch(
+      chat({ body: ask(`direct/${GPT6_LUNA}`, "hi", extra) }),
+      withGpt6(ai.binding),
+    );
+
+    expect(ai.calls).toHaveLength(0);
+    expect(sent).toHaveLength(1);
+    expect(await sent[0]!.json()).toMatchObject({ model: GPT6_LUNA, ...extra });
+  });
+
+  it("leaves a call with tools to another model where it was", async () => {
+    const ai = aiBinding(ok);
+    const { sent, app } = served();
+    await app.fetch(
+      chat({ body: ask(`direct/${LUNA}`, "hi", { tools: [TOOL] }) }),
+      withGpt6(ai.binding),
+    );
+
+    expect(ai.calls).toHaveLength(0);
+    expect(sent).toHaveLength(1);
+  });
+
+  it("answers a caller that asked for a stream in Chat Completions chunks, and times its first token", async () => {
+    const ai = aiBinding(ok);
+    const { records, clock, app } = served();
+    clock.ms = 40;
+    const response = await app.fetch(
+      chat({
+        body: ask(`direct/${GPT6_LUNA}`, "hi", {
+          tools: [TOOL],
+          stream: true,
+          stream_options: { include_usage: true },
+        }),
+      }),
+      withGpt6(ai.binding),
+    );
+    const text = await response.text();
+
+    expect(response.headers.get("content-type")).toBe("text/event-stream");
+    expect(response.headers.get("x-vsr-selected-model")).toBe(GPT6_LUNA);
+    expect(response.headers.get("cf-aig-request-id")).toBe("r1");
+    expect(text).toContain('"delta":{"content":"OK"}');
+    expect(text).toContain('"finish_reason":"stop"');
+    expect(text).toContain('"usage":{"prompt_tokens":9,"completion_tokens":2');
+    expect(text.endsWith("data: [DONE]\n\n")).toBe(true);
+    expect(records).toEqual([
+      expect.objectContaining({
+        event: "model_response",
+        model: GPT6_LUNA,
+        status: 200,
+        stream: true,
+        msToFirstToken: 0,
+        ended: "complete",
+        gatewayRequestId: "r1",
+      }),
+    ]);
+  });
+
+  it("answers a caller that asked for no stream with one object", async () => {
+    const ai = aiBinding(ok);
+    const { app } = served();
+    const response = await app.fetch(
+      chat({ body: ask(`direct/${GPT6_LUNA}`, "hi", { tools: [TOOL] }) }),
+      withGpt6(ai.binding),
+    );
+
+    expect(response.headers.get("content-type")).toBe("application/json");
+    expect(await response.json()).toMatchObject({
+      object: "chat.completion",
+      model: "gpt-6-luna",
+      choices: [
+        {
+          message: { role: "assistant", content: "OK" },
+          finish_reason: "stop",
+        },
+      ],
+      usage: { prompt_tokens: 9, completion_tokens: 2, total_tokens: 11 },
+    });
+    // The model was asked for a stream all the same.
+    expect(ai.calls[0]!.inputs.stream).toBe(true);
+  });
+
+  it("refuses a body it cannot translate, before any call", async () => {
+    const ai = aiBinding(ok);
+    const { records, app } = served();
+    const response = await app.fetch(
+      chat({
+        body: ask(`direct/${GPT6_LUNA}`, "hi", { tools: [TOOL], seed: 7 }),
+      }),
+      withGpt6(ai.binding),
+    );
+
+    expect(response.status).toBe(400);
+    const { error } = (await response.json()) as {
+      error: { code: string; message: string };
+    };
+    expect(error.code).toBe("unsupported_parameter");
+    expect(error.message).toContain('the field "seed"');
+    expect(ai.calls).toHaveLength(0);
+    expect(records).toHaveLength(0);
+  });
+
+  it("goes the same way when a policy chooses it", async () => {
+    const ai = aiBinding(ok);
+    const { sent, app } = gateway(undefined, VIA_POLICY);
+    const response = await app.fetch(
+      chat({ body: ask("policy/routing", "hi", { tools: [TOOL] }) }),
+      withGpt6(ai.binding),
+    );
+
+    expect(sent).toHaveLength(0);
+    expect(ai.calls[0]!.inputs.store).toBe(false);
+    expect(await response.json()).toMatchObject({
+      choices: [{ message: { content: "OK" } }],
+    });
+    expect(response.headers.get("x-vsr-selected-decision")).toBe("default");
+  });
+
+  it("relays the binding's error as it is", async () => {
+    const ai = aiBinding(() =>
+      Response.json({ error: "busy" }, { status: 429 }),
+    );
+    const { records, app } = served();
+    const response = await app.fetch(
+      chat({ body: ask(`direct/${GPT6_LUNA}`, "hi", { tools: [TOOL] }) }),
+      withGpt6(ai.binding),
+    );
+
+    expect(response.status).toBe(429);
+    expect(await response.json()).toEqual({ error: "busy" });
+    expect(records).toEqual([
+      expect.objectContaining({
+        event: "model_response",
+        model: GPT6_LUNA,
+        status: 429,
+      }),
+    ]);
+  });
+
+  it("answers 500 when the AI binding is missing, also for a call with no tools", async () => {
+    const { app } = served();
+    const response = await app.fetch(
+      chat({ body: ask(`direct/${GPT6_LUNA}`, "hi") }),
+      withGpt6(undefined),
+    );
+
+    expect(response.status).toBe(500);
+    expect(await errorCode(response)).toBe("misconfigured");
+  });
+
+  it("has a config hash that tells this way for some calls apart from the endpoint alone", async () => {
+    const settings = await readSettings(withGpt6(aiBinding().binding));
+    const hash = await exactModelConfigHash(
+      { model: GPT6_LUNA },
+      [GPT6_LUNA],
+      settings.deadlineMs,
+    );
+    const onTheEndpointOnly = await shortHash(
+      JSON.stringify({
+        model: GPT6_LUNA,
+        gatewayNames: { [GPT6_LUNA]: GPT6_LUNA },
+        deadlineMs: settings.deadlineMs,
+        fixedHeaders: {
+          "cf-aig-skip-cache": "true",
+          "cf-aig-max-attempts": "1",
+        },
+      }),
+    );
+
+    expect(hash).toMatch(/^[0-9a-f]{16}$/);
+    expect(hash).not.toBe(onTheEndpointOnly);
+  });
+});

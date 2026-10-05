@@ -20,11 +20,11 @@ describe("the deployed entrypoints", () => {
   // when a policy, the way a model is reached, the models that get a
   // session's cache key or the deadline changes.
   it.each([
-    ["policy/starter", "f8859daccaa6c877"],
-    ["direct/openai/gpt-6-luna", "dd877082304b7be2"],
+    ["policy/starter", "14355649c4539555"],
+    ["direct/openai/gpt-6-luna", "83b5c60ca770a299"],
     ["direct/fireworks/glm-5.3-flash", "873338b98cd92471"],
     ["direct/fireworks/glm-5.3", "856604f0d1e0dfcd"],
-    ["direct/openai/gpt-6-sol", "547a492bf62a0c4c"],
+    ["direct/openai/gpt-6-sol", "7df2765f1c3b9843"],
     ["direct/anthropic/claude-opus-5.5", "84a95f482d3cfee6"],
   ])("keeps the config hash of %s", async (model, hash) => {
     // The deployed pool has models that are called through the AI binding.

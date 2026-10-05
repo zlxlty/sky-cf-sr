@@ -1,4 +1,5 @@
 import { fromAnthropic, toAnthropic } from "./anthropic.ts";
+import type { AnswerForm } from "./answer.ts";
 import type { Settings } from "./config.ts";
 import type { Entrypoints } from "./entrypoints.ts";
 import { errorResponse } from "./errors.ts";
@@ -10,6 +11,7 @@ import {
   relayResponse,
   usesAiBinding,
   usesAnthropicFormat,
+  usesResponsesFormat,
   withSessionCacheKey,
   type RoutingDecision,
   type SessionIdentity,
@@ -20,6 +22,7 @@ import {
   type RouteResult,
   type RouteSummary,
 } from "./policy/policy.ts";
+import { fromResponses, toResponses } from "./responses.ts";
 import { timed, type BodyTiming } from "./timing.ts";
 
 /**
@@ -215,8 +218,9 @@ interface Call {
  * is the caller's, with a cache key for the session where the model gets one.
  *
  * A model that the binding takes in Anthropic's format gets the body
- * translated, and its answer translated back. A body that cannot be
- * translated is refused before any call is made.
+ * translated, and its answer translated back. So does a call that goes in
+ * OpenAI's Responses format; see `usesResponsesFormat`. A body that cannot
+ * be translated is refused before any call is made.
  */
 async function namedModelCall(
   settings: Settings,
@@ -228,14 +232,19 @@ async function namedModelCall(
   if (usesAnthropicFormat(model)) {
     const translated = toAnthropic(body, identity.sessionId);
     if ("refused" in translated) return translated;
-    const usage = body.stream_options as { include_usage?: unknown } | null;
-    const form = {
-      stream: body.stream === true,
-      includeUsage: usage?.include_usage === true,
-      created: Math.floor(Date.now() / 1000),
-    };
+    const form = answerForm(body);
     return async (signal) =>
       fromAnthropic(
+        await aiBindingCall(settings, model, translated.inputs, signal),
+        form,
+      );
+  }
+  if (usesResponsesFormat(model, body)) {
+    const translated = toResponses(body);
+    if ("refused" in translated) return translated;
+    const form = answerForm(body);
+    return async (signal) =>
+      fromResponses(
         await aiBindingCall(settings, model, translated.inputs, signal),
         form,
       );
@@ -244,6 +253,16 @@ async function namedModelCall(
   return usesAiBinding(model)
     ? (signal) => aiBindingCall(settings, model, sent, signal)
     : (signal) => deps.fetch(exactModelRequest(settings, model, sent, signal));
+}
+
+/** The form of the answer that a caller's body asks for. */
+function answerForm(body: Record<string, unknown>): AnswerForm {
+  const usage = body.stream_options as { include_usage?: unknown } | null;
+  return {
+    stream: body.stream === true,
+    includeUsage: usage?.include_usage === true,
+    created: Math.floor(Date.now() / 1000),
+  };
 }
 
 /**

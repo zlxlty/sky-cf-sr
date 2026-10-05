@@ -1,6 +1,11 @@
 import type { AutoRouterPolicy, Settings } from "./config.ts";
 import { shortHash } from "./hash.ts";
-import { ANTHROPIC_FORMAT, CACHE_KEY_MODELS, VIA_AI_BINDING } from "./reach.ts";
+import {
+  ANTHROPIC_FORMAT,
+  CACHE_KEY_MODELS,
+  RESPONSES_FORMAT_WITH_TOOLS,
+  VIA_AI_BINDING,
+} from "./reach.ts";
 
 /** The model name that selects the Auto Router on AI Gateway. */
 export const AUTO_ROUTER_MODEL = "cloudflare/auto";
@@ -121,7 +126,11 @@ export interface AiBinding {
   ): Promise<Response>;
 }
 
-/** Whether a call that names this model goes through the AI binding; see `VIA_AI_BINDING`. */
+/**
+ * Whether every call that names this model goes through the AI binding; see
+ * `VIA_AI_BINDING`. Some calls to other models go through it too; see
+ * `usesResponsesFormat`.
+ */
 export function usesAiBinding(model: string): boolean {
   return VIA_AI_BINDING.includes(model);
 }
@@ -132,11 +141,30 @@ export function usesAnthropicFormat(model: string): boolean {
 }
 
 /**
+ * Whether this call goes through the binding in OpenAI's Responses format:
+ * a call to a model of `RESPONSES_FORMAT_WITH_TOOLS`, with tools, at an
+ * effort other than "none". An effort that is not set is not "none": the
+ * model then uses its own, and the endpoint refuses the call.
+ */
+export function usesResponsesFormat(
+  model: string,
+  body: Record<string, unknown>,
+): boolean {
+  return (
+    RESPONSES_FORMAT_WITH_TOOLS.includes(model) &&
+    Array.isArray(body.tools) &&
+    body.tools.length > 0 &&
+    body.reasoning_effort !== "none"
+  );
+}
+
+/**
  * Calls one named model through the Worker's AI binding; see `VIA_AI_BINDING`
- * for which models and why. The request goes through the same Gateway,
- * under unified billing, with the settings the fixed headers give a call to
- * the endpoint: no cached answer and one attempt. The model is named apart
- * from the body, so `model` is left out of it; nothing else changes.
+ * and `RESPONSES_FORMAT_WITH_TOOLS` for which calls and why. The request goes
+ * through the same Gateway, under unified billing, with the settings the
+ * fixed headers give a call to the endpoint: no cached answer and one
+ * attempt. The model is named apart from the body, so `model` is left out of
+ * it; nothing else changes.
  *
  * The binding has no setting for the Gateway to log a request without its
  * text. So when `logPayloads` is off, such a call is not logged at all.
@@ -224,9 +252,9 @@ export async function configHash(policy: AutoRouterPolicy): Promise<string> {
  * The config hash of an entrypoint that calls one named model: the model, or
  * the version of the policy that chooses it; how each model it can call is
  * reached, by the name the Gateway gets or through the AI binding, and in
- * which format; which of them get a session's cache key; the deadline; and
- * the fixed headers. Like `configHash`, it leaves out `logPayloads`, which
- * does not change results.
+ * which format, also where only some of its calls go another way; which of
+ * them get a session's cache key; the deadline; and the fixed headers. Like
+ * `configHash`, it leaves out `logPayloads`, which does not change results.
  */
 export async function exactModelConfigHash(
   target: { model: string } | { policyVersion: string },
@@ -250,10 +278,15 @@ export async function exactModelConfigHash(
 }
 
 function reachedBy(model: string): string {
-  if (!usesAiBinding(model)) return gatewayModelName(model);
-  return usesAnthropicFormat(model)
-    ? `ai-binding:anthropic-format:${model}`
-    : `ai-binding:${model}`;
+  if (usesAiBinding(model)) {
+    return usesAnthropicFormat(model)
+      ? `ai-binding:anthropic-format:${model}`
+      : `ai-binding:${model}`;
+  }
+  const name = gatewayModelName(model);
+  return RESPONSES_FORMAT_WITH_TOOLS.includes(model)
+    ? `${name};tools-with-effort:ai-binding:responses-format`
+    : name;
 }
 
 export function readDecision(headers: Headers): RoutingDecision {

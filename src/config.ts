@@ -1,5 +1,5 @@
 import { configHash, type AiBinding } from "./gateway.ts";
-import { VIA_AI_BINDING } from "./reach.ts";
+import { RESPONSES_FORMAT_WITH_TOOLS, VIA_AI_BINDING } from "./reach.ts";
 
 /** The Worker's bindings before validation; see `cloudflare.config.ts`. */
 export interface RawEnv {
@@ -34,8 +34,9 @@ export interface Settings extends AutoRouterPolicy {
   chatCompletionsUrl: string;
   gatewayToken: string;
   /**
-   * The AI binding and the Gateway's ID, for calls that name a model the
-   * compat endpoint does not serve. Both are set when the pool has such a model.
+   * The AI binding and the Gateway's ID, for the calls that go through the
+   * binding and not through the compat endpoint. Both are set when the pool
+   * has a model with such calls.
    */
   ai: AiBinding | null;
   gatewayId: string | null;
@@ -64,7 +65,8 @@ export async function readSettings(env: RawEnv): Promise<Settings> {
   const gateway = gatewayUrl(env.AIG_GATEWAY_URL);
   const ai = aiBinding(env.AI);
   const gatewayId = gateway.pathname.split("/").filter(Boolean).at(-1) ?? null;
-  if (policy.allowedModels.some((model) => VIA_AI_BINDING.includes(model))) {
+  const viaBinding = [...VIA_AI_BINDING, ...RESPONSES_FORMAT_WITH_TOOLS];
+  if (policy.allowedModels.some((model) => viaBinding.includes(model))) {
     if (ai === null) {
       throw new ConfigError(
         "AI is not bound, and the pool has a model that is called through it",
