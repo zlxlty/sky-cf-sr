@@ -1,5 +1,5 @@
 import { configHash, type AiBinding } from "./gateway.ts";
-import { VIA_AI_BINDING } from "./pool.ts";
+import { VIA_AI_BINDING } from "./reach.ts";
 
 /** The Worker's bindings before validation; see `cloudflare.config.ts`. */
 export interface RawEnv {

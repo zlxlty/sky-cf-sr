@@ -1,6 +1,6 @@
 /**
  * Anthropic's Messages format, for the pool models that the AI binding takes
- * and answers in it; see `ANTHROPIC_FORMAT` in `pool.ts`. A caller of this
+ * and answers in it; see `ANTHROPIC_FORMAT` in `reach.ts`. A caller of this
  * Worker speaks OpenAI's Chat Completions format, so a call to such a model is
  * translated on the way in, and its answer on the way back.
  *

@@ -1,6 +1,6 @@
 import type { AutoRouterPolicy, Settings } from "./config.ts";
 import { shortHash } from "./hash.ts";
-import { ANTHROPIC_FORMAT, CACHE_KEY_MODELS, VIA_AI_BINDING } from "./pool.ts";
+import { ANTHROPIC_FORMAT, CACHE_KEY_MODELS, VIA_AI_BINDING } from "./reach.ts";
 
 /** The model name that selects the Auto Router on AI Gateway. */
 export const AUTO_ROUTER_MODEL = "cloudflare/auto";

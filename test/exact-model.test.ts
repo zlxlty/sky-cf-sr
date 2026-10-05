@@ -70,7 +70,7 @@ const POLICIES = {
 const SETTINGS = await readSettings(ENV);
 
 // A model the compat endpoint does not serve when it is named; see
-// VIA_AI_BINDING in src/pool.ts.
+// VIA_AI_BINDING in src/reach.ts.
 const GLM = "fireworks/glm-5.3";
 const VIA_BINDING = {
   routing: {
@@ -971,7 +971,7 @@ describe("a session's calls to a model that gets a cache key", () => {
 });
 
 describe("a model the binding takes in Anthropic's format", () => {
-  // See ANTHROPIC_FORMAT in src/pool.ts.
+  // See ANTHROPIC_FORMAT in src/reach.ts.
   const OPUS = "anthropic/claude-opus-5.5";
   const VIA_POLICY = {
     routing: {
