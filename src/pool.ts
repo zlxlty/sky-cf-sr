@@ -44,15 +44,22 @@ export const ANTHROPIC_FORMAT: readonly string[] = [
 ];
 
 /**
- * Pool models that read a repeated prompt from their cache only when the
- * calls that share it carry the same cache key. With no key, each of six
- * calls with one long prefix was billed at the full price; with one, every
- * call after the first read the prefix and was billed at 19% of it (seen in
- * production on 2026-10-04).
+ * Pool models that get a session's cache key. The key is for calls whose
+ * prompts start alike and end differently, such as several questions about
+ * one long document. In production on 2026-10-04, with no key GLM 5.3 read
+ * such a start from its cache on 1 of 10 later calls, and GLM 5.3 Flash on
+ * none; with a key GLM 5.3 read it on every call after the first, billed at
+ * 19% of the full price, and Flash read about two thirds of it.
  *
- * OpenAI's models take the same key and read nothing with or without it, so
- * they are not listed. Opus takes no key: its cache needs a marker in the
- * request, which the translation to Anthropic's format adds.
+ * A conversation that only grows does not need the key: on 2026-10-05,
+ * GLM 5.3 read one from its cache on most later calls, with a key and with
+ * none.
+ *
+ * OpenAI's models are not listed, because the key changes nothing for them:
+ * they read a conversation that grows with no key, and prompts that only
+ * start alike not at all, with a key or without. Opus takes no key: its
+ * cache needs a marker in the request, which the translation to Anthropic's
+ * format adds.
  */
 export const CACHE_KEY_MODELS: readonly string[] = [
   "fireworks/glm-5.3-flash",

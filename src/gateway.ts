@@ -77,9 +77,8 @@ export function exactModelRequest(
 }
 
 /**
- * The caller's body with a cache key for its session, for a model that reads
- * from its cache only when given one; see `CACHE_KEY_MODELS`. Any other body
- * comes back as it is.
+ * The caller's body with a cache key for its session, for a model that gets
+ * one; see `CACHE_KEY_MODELS`. Any other body comes back as it is.
  *
  * The key is a hash of the session ID: every call of a session carries the
  * same key, and the provider does not get the caller's own ID. A body that

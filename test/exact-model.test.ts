@@ -845,7 +845,7 @@ describe("a model the compat endpoint does not serve", () => {
   });
 });
 
-describe("a session's calls to a model that needs a cache key", () => {
+describe("a session's calls to a model that gets a cache key", () => {
   /** The inputs the binding gets for one direct call to GLM. */
   async function inputsFor(
     headers: Record<string, string>,
@@ -911,7 +911,7 @@ describe("a session's calls to a model that needs a cache key", () => {
     expect(ai.calls[0]!.inputs.prompt_cache_key).toMatch(/^session-/);
   });
 
-  it("is not added for a model that is not listed as needing one", async () => {
+  it("is not added for a model that is not listed to get one", async () => {
     const { sent, app } = served();
     await app.fetch(
       chat({

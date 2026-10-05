@@ -212,8 +212,7 @@ interface Call {
 /**
  * How one named model is called: through the Gateway's compat endpoint, or
  * through the AI binding for the models listed in `VIA_AI_BINDING`. The body
- * is the caller's, with a cache key for the session where the model needs one
- * to read from its cache.
+ * is the caller's, with a cache key for the session where the model gets one.
  *
  * A model that the binding takes in Anthropic's format gets the body
  * translated, and its answer translated back. A body that cannot be
