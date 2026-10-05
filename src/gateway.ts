@@ -1,6 +1,6 @@
 import type { AutoRouterPolicy, Settings } from "./config.ts";
 import { shortHash } from "./hash.ts";
-import { CACHE_KEY_MODELS, GATEWAY_NAMES, VIA_AI_BINDING } from "./pool.ts";
+import { ANTHROPIC_FORMAT, CACHE_KEY_MODELS, VIA_AI_BINDING } from "./pool.ts";
 
 /** The model name that selects the Auto Router on AI Gateway. */
 export const AUTO_ROUTER_MODEL = "cloudflare/auto";
@@ -127,9 +127,14 @@ export function usesAiBinding(model: string): boolean {
   return VIA_AI_BINDING.includes(model);
 }
 
+/** Whether the binding takes and answers this model in Anthropic's format; see `ANTHROPIC_FORMAT`. */
+export function usesAnthropicFormat(model: string): boolean {
+  return ANTHROPIC_FORMAT.includes(model);
+}
+
 /**
- * Calls one named model through the Worker's AI binding, for the models the
- * compat endpoint does not serve. The request goes through the same Gateway,
+ * Calls one named model through the Worker's AI binding; see `VIA_AI_BINDING`
+ * for which models and why. The request goes through the same Gateway,
  * under unified billing, with the settings the fixed headers give a call to
  * the endpoint: no cached answer and one attempt. The model is named apart
  * from the body, so `model` is left out of it; nothing else changes.
@@ -183,11 +188,10 @@ function namedModelBody(
 
 /**
  * The pool names models as the Auto Router does. A call to one named model
- * uses the compat endpoint's `{provider}/{model}` form, which for Workers AI is
- * `workers-ai/@cf/...`, and for a few models a different provider ID.
+ * uses the compat endpoint's `{provider}/{model}` form, which for Workers AI
+ * is `workers-ai/@cf/...`.
  */
 function gatewayModelName(model: string): string {
-  if (Object.hasOwn(GATEWAY_NAMES, model)) return GATEWAY_NAMES[model]!;
   return model.startsWith("@cf/") ? `workers-ai/${model}` : model;
 }
 
@@ -220,9 +224,10 @@ export async function configHash(policy: AutoRouterPolicy): Promise<string> {
 /**
  * The config hash of an entrypoint that calls one named model: the model, or
  * the version of the policy that chooses it; how each model it can call is
- * reached, by the name the Gateway gets or through the AI binding; which of
- * them get a session's cache key; the deadline; and the fixed headers. Like
- * `configHash`, it leaves out `logPayloads`, which does not change results.
+ * reached, by the name the Gateway gets or through the AI binding, and in
+ * which format; which of them get a session's cache key; the deadline; and
+ * the fixed headers. Like `configHash`, it leaves out `logPayloads`, which
+ * does not change results.
  */
 export async function exactModelConfigHash(
   target: { model: string } | { policyVersion: string },
@@ -230,10 +235,7 @@ export async function exactModelConfigHash(
   deadlineMs: number,
 ): Promise<string> {
   const gatewayNames = Object.fromEntries(
-    models.map((model) => [
-      model,
-      usesAiBinding(model) ? `ai-binding:${model}` : gatewayModelName(model),
-    ]),
+    models.map((model) => [model, reachedBy(model)]),
   );
   const cacheKeyed = models.filter((model) => CACHE_KEY_MODELS.includes(model));
   return shortHash(
@@ -246,6 +248,13 @@ export async function exactModelConfigHash(
       ...(cacheKeyed.length > 0 && { sessionCacheKey: cacheKeyed }),
     }),
   );
+}
+
+function reachedBy(model: string): string {
+  if (!usesAiBinding(model)) return gatewayModelName(model);
+  return usesAnthropicFormat(model)
+    ? `ai-binding:anthropic-format:${model}`
+    : `ai-binding:${model}`;
 }
 
 export function readDecision(headers: Headers): RoutingDecision {

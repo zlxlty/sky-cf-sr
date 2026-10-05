@@ -1,3 +1,4 @@
+import { fromAnthropic, toAnthropic } from "./anthropic.ts";
 import type { Settings } from "./config.ts";
 import type { Entrypoints } from "./entrypoints.ts";
 import { errorResponse } from "./errors.ts";
@@ -8,6 +9,7 @@ import {
   readDecision,
   relayResponse,
   usesAiBinding,
+  usesAnthropicFormat,
   withSessionCacheKey,
   type RoutingDecision,
   type SessionIdentity,
@@ -162,17 +164,20 @@ export async function handleChat(
         send: (signal) =>
           deps.fetch(autoRouterRequest(settings, body, identity, signal)),
       });
-    case "direct":
+    case "direct": {
+      const send = await namedModelCall(
+        settings,
+        deps,
+        entrypoint.model,
+        parsed,
+        identity,
+      );
+      if (typeof send !== "function") return unsupported(send.refused);
       return callGateway(request, settings, deps, record, {
         model: entrypoint.model,
-        send: await namedModelCall(
-          settings,
-          deps,
-          entrypoint.model,
-          parsed,
-          identity,
-        ),
+        send,
       });
+    }
     case "policy": {
       const result = routeRequest(entrypoint.policy, parsed);
       const routed = { ...record, policy: summarizeRoute(result) };
@@ -180,16 +185,18 @@ export async function handleChat(
         deps.log({ event: "routing_failed", ...routed });
         return routingFailed(result);
       }
+      const send = await namedModelCall(
+        settings,
+        deps,
+        result.model,
+        parsed,
+        identity,
+      );
+      if (typeof send !== "function") return unsupported(send.refused);
       return callGateway(request, settings, deps, routed, {
         model: result.model,
         decision: result.decision,
-        send: await namedModelCall(
-          settings,
-          deps,
-          result.model,
-          parsed,
-          identity,
-        ),
+        send,
       });
     }
   }
@@ -204,9 +211,13 @@ interface Call {
 
 /**
  * How one named model is called: through the Gateway's compat endpoint, or
- * through the AI binding for the models that endpoint does not serve. The
- * body is the caller's, with a cache key for the session where the model
- * needs one to read from its cache.
+ * through the AI binding for the models listed in `VIA_AI_BINDING`. The body
+ * is the caller's, with a cache key for the session where the model needs one
+ * to read from its cache.
+ *
+ * A model that the binding takes in Anthropic's format gets the body
+ * translated, and its answer translated back. A body that cannot be
+ * translated is refused before any call is made.
  */
 async function namedModelCall(
   settings: Settings,
@@ -214,7 +225,22 @@ async function namedModelCall(
   model: string,
   body: Record<string, unknown>,
   identity: SessionIdentity,
-): Promise<Call["send"]> {
+): Promise<Call["send"] | { refused: string }> {
+  if (usesAnthropicFormat(model)) {
+    const translated = toAnthropic(body, identity.sessionId);
+    if ("refused" in translated) return translated;
+    const usage = body.stream_options as { include_usage?: unknown } | null;
+    const form = {
+      stream: body.stream === true,
+      includeUsage: usage?.include_usage === true,
+      created: Math.floor(Date.now() / 1000),
+    };
+    return async (signal) =>
+      fromAnthropic(
+        await aiBindingCall(settings, model, translated.inputs, signal),
+        form,
+      );
+  }
   const sent = await withSessionCacheKey(body, model, identity.sessionId);
   return usesAiBinding(model)
     ? (signal) => aiBindingCall(settings, model, sent, signal)
@@ -371,6 +397,11 @@ function noResponse(
 
 function invalid(code: string, message: string): Response {
   return errorResponse(400, "invalid_request_error", code, message);
+}
+
+/** The request is valid for a model that speaks OpenAI's format, but not for this one. */
+function unsupported(message: string): Response {
+  return invalid("unsupported_parameter", message);
 }
 
 function tooLarge(): Response {

@@ -30,7 +30,7 @@ describe("forwarding to the Auto Router", () => {
       "Bearer gateway-token",
     );
     expect(outbound.headers.get("cf-aig-allowed-models")).toBe(
-      "openai/gpt-5.6-luna,anthropic/claude-opus-5.5",
+      "openai/gpt-5.6-luna,anthropic/claude-sonnet-5",
     );
   });
 
@@ -84,7 +84,7 @@ describe("forwarding to the Auto Router", () => {
     const headers = sent[0]!.headers;
     expect(headers.get("authorization")).toBeNull();
     expect(headers.get("cf-aig-allowed-models")).toBe(
-      "openai/gpt-5.6-luna,anthropic/claude-opus-5.5",
+      "openai/gpt-5.6-luna,anthropic/claude-sonnet-5",
     );
     expect(headers.get("cf-aig-no-session-affinity")).toBeNull();
     expect(headers.get("cf-aig-session-id")).toBeNull();
@@ -316,7 +316,7 @@ describe("the decision record", () => {
         { choices: [{ message: { content: "a private answer" } }] },
         {
           headers: {
-            "cf-aig-routed-model": "anthropic/claude-opus-5.5",
+            "cf-aig-routed-model": "anthropic/claude-sonnet-5",
             "cf-aig-routing-reason": "pinned_by_turn",
             "cf-aig-routing-decision-id": "decision-2",
             "cf-aig-request-id": "request-2",
@@ -343,7 +343,7 @@ describe("the decision record", () => {
       stream: false,
       requestBytes: JSON.stringify(body).length,
       status: 200,
-      routedModel: "anthropic/claude-opus-5.5",
+      routedModel: "anthropic/claude-sonnet-5",
       routingReason: "pinned_by_turn",
       decisionId: "decision-2",
       gatewayRequestId: "request-2",

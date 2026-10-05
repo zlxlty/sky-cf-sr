@@ -14,30 +14,33 @@ export const POOL = [
 ];
 
 /**
- * Pool models that a call naming one model must name differently from the
- * Auto Router on the Gateway's compat endpoint. Anthropic names Opus 5.5
- * `claude-opus-5-5`; the Auto Router's name gets 404 from Anthropic (seen in
- * production on 2026-10-03).
- */
-export const GATEWAY_NAMES: Readonly<Record<string, string>> = {
-  "anthropic/claude-opus-5.5": "anthropic/claude-opus-5-5",
-};
-
-/**
- * Pool models that the compat endpoint does not serve when one is named,
- * though the Auto Router can choose them: Fireworks is not one of that
- * endpoint's providers, and it answers 400 "Invalid provider" (seen in
- * production on 2026-10-04).
+ * Pool models that a call naming one model reaches through the Worker's AI
+ * binding, not through the Gateway's compat endpoint. The binding takes every
+ * model of Cloudflare's catalogue under the Auto Router's name. There are two
+ * reasons, both seen in production on 2026-10-04:
  *
- * A call that names one of these goes through the Worker's AI binding, which
- * takes every model of Cloudflare's catalogue under the Auto Router's name.
- * A model of xAI would need the same: while `xai/grok-4.6` was in the pool,
- * the endpoint answered 401 "No credentials presented" for `grok/grok-4.6`,
- * and the binding served it.
+ * - The endpoint does not serve the Fireworks models when one is named,
+ *   though the Auto Router can choose them: Fireworks is not one of its
+ *   providers, and it answers 400 "Invalid provider". A model of xAI would
+ *   need the same: while `xai/grok-4.6` was in the pool, the endpoint
+ *   answered 401 "No credentials presented" for it, and the binding served it.
+ * - The endpoint serves Opus, but never from Anthropic's prompt cache: it
+ *   takes a cache marker and ignores it, and every call is billed at the full
+ *   price. Through the binding, a call that reads the cache is billed at 6%.
  */
 export const VIA_AI_BINDING: readonly string[] = [
   "fireworks/glm-5.3-flash",
   "fireworks/glm-5.3",
+  "anthropic/claude-opus-5.5",
+];
+
+/**
+ * Models that the binding takes and answers in Anthropic's own Messages
+ * format, not in OpenAI's. A call to one is translated both ways; see
+ * `src/anthropic.ts`.
+ */
+export const ANTHROPIC_FORMAT: readonly string[] = [
+  "anthropic/claude-opus-5.5",
 ];
 
 /**
@@ -47,8 +50,9 @@ export const VIA_AI_BINDING: readonly string[] = [
  * call after the first read the prefix and was billed at 19% of it (seen in
  * production on 2026-10-04).
  *
- * OpenAI's models take the same key and read nothing with or without it, and
- * Opus reads nothing on the compat endpoint, so neither is listed.
+ * OpenAI's models take the same key and read nothing with or without it, so
+ * they are not listed. Opus takes no key: its cache needs a marker in the
+ * request, which the translation to Anthropic's format adds.
  */
 export const CACHE_KEY_MODELS: readonly string[] = [
   "fireworks/glm-5.3-flash",

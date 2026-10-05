@@ -15,11 +15,10 @@ import {
   hangOn,
 } from "./harness.ts";
 
-// The two models of the test pool in fixtures.ts.
+// The two models of the test pool in fixtures.ts. Both are called by name
+// through the compat endpoint.
 const LUNA = "openai/gpt-5.6-luna";
-const OPUS = "anthropic/claude-opus-5.5";
-// Anthropic's own ID for OPUS, from GATEWAY_NAMES in src/pool.ts.
-const OPUS_AT_ANTHROPIC = "anthropic/claude-opus-5-5";
+const SONNET = "anthropic/claude-sonnet-5";
 
 const ROUTING = {
   signals: {
@@ -27,7 +26,7 @@ const ROUTING = {
   },
   models: [
     { id: LUNA, contextWindow: 100000, tools: false },
-    { id: OPUS, contextWindow: 100000, tools: true },
+    { id: SONNET, contextWindow: 100000, tools: true },
   ],
   decisions: [
     {
@@ -35,9 +34,9 @@ const ROUTING = {
       priority: 10,
       rules: { type: "keyword", name: "code" },
       onUnknown: "no_match",
-      models: [OPUS],
+      models: [SONNET],
     },
-    { name: "default", priority: 0, models: [LUNA, OPUS] },
+    { name: "default", priority: 0, models: [LUNA, SONNET] },
   ],
 };
 
@@ -137,7 +136,7 @@ describe("choosing the router by model name", () => {
     };
     expect(error.code).toBe("unsupported_model");
     expect(error.message).toBe(
-      `Use "cloudflare/auto", "policy/routing", "policy/strict", "policy/outside", or "direct/" followed by one of: ${LUNA}, ${OPUS}.`,
+      `Use "cloudflare/auto", "policy/routing", "policy/strict", "policy/outside", or "direct/" followed by one of: ${LUNA}, ${SONNET}.`,
     );
     expect(sent).toHaveLength(0);
     expect(records).toHaveLength(0);
@@ -197,19 +196,6 @@ describe("a direct entrypoint", () => {
     expect(records[0]).toMatchObject({ model: kimi });
   });
 
-  it("names a model by its provider's ID where that differs, and records the pool's name", async () => {
-    const { sent, records, app } = served();
-    const response = await app.fetch(
-      chat({ body: ask(`direct/${OPUS}`, "hi") }),
-      ENV,
-    );
-    await response.text();
-
-    expect(await sentModel(sent[0]!)).toBe(OPUS_AT_ANTHROPIC);
-    expect(response.headers.get("x-vsr-selected-model")).toBe(OPUS);
-    expect(records[0]).toMatchObject({ model: OPUS });
-  });
-
   it("renames max_tokens to max_completion_tokens for an OpenAI model, in place", async () => {
     const { sent, app } = served();
     const body = {
@@ -253,7 +239,7 @@ describe("a direct entrypoint", () => {
   it("keeps max_tokens for a model of another provider", async () => {
     const { sent, app } = served();
     await app.fetch(
-      chat({ body: ask(`direct/${OPUS}`, "hi", { max_tokens: 20 }) }),
+      chat({ body: ask(`direct/${SONNET}`, "hi", { max_tokens: 20 }) }),
       ENV,
     );
 
@@ -335,8 +321,8 @@ describe("a policy entrypoint", () => {
       ENV,
     );
 
-    expect(await sentModel(sent[0]!)).toBe(OPUS_AT_ANTHROPIC);
-    expect(response.headers.get("x-vsr-selected-model")).toBe(OPUS);
+    expect(await sentModel(sent[0]!)).toBe(SONNET);
+    expect(response.headers.get("x-vsr-selected-model")).toBe(SONNET);
     expect(response.headers.get("x-vsr-selected-decision")).toBe("coding");
     expect(response.headers.get("x-vsr-config-hash")).toBe(
       await hashOf("policy/routing"),
@@ -352,10 +338,10 @@ describe("a policy entrypoint", () => {
     );
     await response.text();
 
-    expect(await sentModel(sent[0]!)).toBe(OPUS_AT_ANTHROPIC);
+    expect(await sentModel(sent[0]!)).toBe(SONNET);
     expect(records[0]).toMatchObject({
       event: "model_response",
-      model: OPUS,
+      model: SONNET,
       policy: {
         outcome: "routed",
         decision: "default",
@@ -383,10 +369,10 @@ describe("a policy entrypoint", () => {
       expect.objectContaining({
         event: "model_response",
         entrypoint: "policy/routing",
-        model: OPUS,
+        model: SONNET,
         policy: {
           outcome: "routed",
-          model: OPUS,
+          model: SONNET,
           decision: "coding",
           matchedSignals: ["keyword:code"],
           ranking: { reason: "only_match" },
@@ -440,7 +426,7 @@ describe("a policy entrypoint", () => {
     };
     expect(error.code).toBe("no_eligible_model");
     expect(error.message).toBe(
-      `No candidate of decision "default" can serve this request. ${LUNA}: the request needs image input, and its support is unknown. ${OPUS}: the request needs image input, and its support is unknown.`,
+      `No candidate of decision "default" can serve this request. ${LUNA}: the request needs image input, and its support is unknown. ${SONNET}: the request needs image input, and its support is unknown.`,
     );
     expect(sent).toHaveLength(0);
     expect(records).toEqual([
@@ -518,7 +504,7 @@ describe("config hashes", () => {
       [
         "cloudflare/auto",
         `direct/${LUNA}`,
-        `direct/${OPUS}`,
+        `direct/${SONNET}`,
         "policy/routing",
         "policy/strict",
       ].map((model) => hashOf(model)),
@@ -613,7 +599,7 @@ describe("the exact-model path shares the pass-through's call handling", () => {
     expect(records).toEqual([
       expect.objectContaining({
         event: "gateway_no_response",
-        model: OPUS,
+        model: SONNET,
         reason: "timeout",
         policy: expect.objectContaining({ decision: "coding" }),
       }),
@@ -625,7 +611,7 @@ describe("the exact-model path shares the pass-through's call handling", () => {
       throw new TypeError("network down");
     });
     const response = await app.fetch(
-      chat({ body: ask(`direct/${OPUS}`, "hi") }),
+      chat({ body: ask(`direct/${SONNET}`, "hi") }),
       ENV,
     );
 
@@ -634,7 +620,7 @@ describe("the exact-model path shares the pass-through's call handling", () => {
     expect(records).toEqual([
       expect.objectContaining({
         event: "gateway_no_response",
-        model: OPUS,
+        model: SONNET,
         reason: "network",
         error: "TypeError",
       }),
@@ -981,5 +967,254 @@ describe("a session's calls to a model that needs a cache key", () => {
     expect(await hash({ model: LUNA }, [LUNA])).toBe(
       await before({ model: LUNA }, { [LUNA]: LUNA }),
     );
+  });
+});
+
+describe("a model the binding takes in Anthropic's format", () => {
+  // See ANTHROPIC_FORMAT in src/pool.ts.
+  const OPUS = "anthropic/claude-opus-5.5";
+  const VIA_POLICY = {
+    routing: {
+      models: [{ id: OPUS, contextWindow: 100000 }],
+      decisions: [{ name: "default", priority: 0, models: [OPUS] }],
+    },
+  };
+
+  /** The test environment with Opus in the pool and the given AI binding. */
+  function withOpus(ai: unknown) {
+    return {
+      ...ENV,
+      AUTO_ROUTER: { ...ENV.AUTO_ROUTER, allowedModels: [OPUS, LUNA] },
+      AI: ai,
+    };
+  }
+
+  /** The model's answer "OK", as the binding streams it. */
+  function ok(): Response {
+    const events = [
+      {
+        type: "message_start",
+        message: {
+          id: "msg_1",
+          model: "claude-opus-5-5",
+          usage: { input_tokens: 9 },
+        },
+      },
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "text" },
+      },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "OK" },
+      },
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: { output_tokens: 2 },
+      },
+      { type: "message_stop" },
+    ];
+    const text = events
+      .map(
+        (event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+      )
+      .join("");
+    return new Response(text, {
+      headers: {
+        "content-type": "text/event-stream",
+        "cf-aig-request-id": "r1",
+      },
+    });
+  }
+
+  it("is called through the binding, with the body translated", async () => {
+    const ai = aiBinding(ok);
+    const { sent, app } = served();
+    const response = await app.fetch(
+      chat({
+        body: {
+          model: `direct/${OPUS}`,
+          max_completion_tokens: 20,
+          temperature: 0,
+          messages: [
+            { role: "system", content: "Be terse." },
+            { role: "user", content: "hi" },
+          ],
+        },
+      }),
+      withOpus(ai.binding),
+    );
+    await response.text();
+
+    expect(sent).toHaveLength(0);
+    expect(ai.calls).toHaveLength(1);
+    expect(ai.calls[0]!.model).toBe(OPUS);
+    expect(ai.calls[0]!.inputs).toEqual({
+      max_tokens: 20,
+      system: "Be terse.",
+      messages: [{ role: "user", content: "hi" }],
+      stream: true,
+    });
+    expect(ai.calls[0]!.options.gateway).toMatchObject({
+      id: "gateway",
+      skipCache: true,
+      retries: { maxAttempts: 1 },
+    });
+  });
+
+  it("carries a cache marker in a session, and none without one", async () => {
+    const ai = aiBinding(ok);
+    const { app } = served();
+    const body = ask(`direct/${OPUS}`, "hi");
+    await app.fetch(chat({ body }), withOpus(ai.binding));
+    await app.fetch(
+      chat({ body, headers: { "x-session-id": "session-1" } }),
+      withOpus(ai.binding),
+    );
+
+    expect(ai.calls[0]!.inputs).not.toHaveProperty("cache_control");
+    expect(ai.calls[1]!.inputs.cache_control).toEqual({ type: "ephemeral" });
+    // The marker is this model's way to the cache; it takes no cache key.
+    expect(ai.calls[1]!.inputs).not.toHaveProperty("prompt_cache_key");
+  });
+
+  it("answers a caller that asked for a stream in Chat Completions chunks, and times its first token", async () => {
+    const ai = aiBinding(ok);
+    const { records, clock, app } = served();
+    clock.ms = 40;
+    const response = await app.fetch(
+      chat({
+        body: ask(`direct/${OPUS}`, "hi", {
+          stream: true,
+          stream_options: { include_usage: true },
+        }),
+      }),
+      withOpus(ai.binding),
+    );
+    const text = await response.text();
+
+    expect(response.headers.get("content-type")).toBe("text/event-stream");
+    expect(response.headers.get("x-vsr-selected-model")).toBe(OPUS);
+    expect(response.headers.get("cf-aig-request-id")).toBe("r1");
+    expect(text).toContain('"delta":{"content":"OK"}');
+    expect(text).toContain('"finish_reason":"stop"');
+    expect(text).toContain('"usage":{"prompt_tokens":9,"completion_tokens":2');
+    expect(text.endsWith("data: [DONE]\n\n")).toBe(true);
+    expect(records).toEqual([
+      expect.objectContaining({
+        event: "model_response",
+        model: OPUS,
+        status: 200,
+        stream: true,
+        msToFirstToken: 0,
+        ended: "complete",
+        gatewayRequestId: "r1",
+      }),
+    ]);
+  });
+
+  it("answers a caller that asked for no stream with one object", async () => {
+    const ai = aiBinding(ok);
+    const { app } = served();
+    const response = await app.fetch(
+      chat({ body: ask(`direct/${OPUS}`, "hi") }),
+      withOpus(ai.binding),
+    );
+
+    expect(response.headers.get("content-type")).toBe("application/json");
+    expect(await response.json()).toMatchObject({
+      object: "chat.completion",
+      model: "claude-opus-5-5",
+      choices: [
+        {
+          message: { role: "assistant", content: "OK" },
+          finish_reason: "stop",
+        },
+      ],
+      usage: { prompt_tokens: 9, completion_tokens: 2, total_tokens: 11 },
+    });
+    // The model was asked for a stream all the same.
+    expect(ai.calls[0]!.inputs.stream).toBe(true);
+  });
+
+  it("refuses a body it cannot translate, before any call", async () => {
+    const ai = aiBinding(ok);
+    const { records, app } = served();
+    const response = await app.fetch(
+      chat({ body: ask(`direct/${OPUS}`, "hi", { seed: 7 }) }),
+      withOpus(ai.binding),
+    );
+
+    expect(response.status).toBe(400);
+    const { error } = (await response.json()) as {
+      error: { code: string; message: string };
+    };
+    expect(error.code).toBe("unsupported_parameter");
+    expect(error.message).toContain('the field "seed"');
+    expect(ai.calls).toHaveLength(0);
+    expect(records).toHaveLength(0);
+  });
+
+  it("goes the same way when a policy chooses it", async () => {
+    const ai = aiBinding(ok);
+    const { sent, app } = gateway(undefined, VIA_POLICY);
+    const response = await app.fetch(
+      chat({ body: ask("policy/routing", "hi") }),
+      withOpus(ai.binding),
+    );
+
+    expect(sent).toHaveLength(0);
+    expect(ai.calls[0]!.inputs.stream).toBe(true);
+    expect(await response.json()).toMatchObject({
+      choices: [{ message: { content: "OK" } }],
+    });
+    expect(response.headers.get("x-vsr-selected-decision")).toBe("default");
+  });
+
+  it("relays the binding's error as it is", async () => {
+    const ai = aiBinding(() =>
+      Response.json({ error: "busy" }, { status: 429 }),
+    );
+    const { records, app } = served();
+    const response = await app.fetch(
+      chat({ body: ask(`direct/${OPUS}`, "hi") }),
+      withOpus(ai.binding),
+    );
+
+    expect(response.status).toBe(429);
+    expect(await response.json()).toEqual({ error: "busy" });
+    expect(records).toEqual([
+      expect.objectContaining({
+        event: "model_response",
+        model: OPUS,
+        status: 429,
+      }),
+    ]);
+  });
+
+  it("has a config hash that tells its format apart from another binding model's", async () => {
+    const settings = await readSettings(withOpus(aiBinding().binding));
+    const hash = await exactModelConfigHash(
+      { model: OPUS },
+      [OPUS],
+      settings.deadlineMs,
+    );
+    const inOpenAIFormat = await shortHash(
+      JSON.stringify({
+        model: OPUS,
+        gatewayNames: { [OPUS]: `ai-binding:${OPUS}` },
+        deadlineMs: settings.deadlineMs,
+        fixedHeaders: {
+          "cf-aig-skip-cache": "true",
+          "cf-aig-max-attempts": "1",
+        },
+      }),
+    );
+
+    expect(hash).not.toBe(inOpenAIFormat);
   });
 });

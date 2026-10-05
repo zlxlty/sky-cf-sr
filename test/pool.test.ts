@@ -17,15 +17,15 @@ describe("the deployed Auto Router setup", () => {
 
 describe("the deployed entrypoints", () => {
   // As for the Auto Router: benchmark runs check these hashes. They change
-  // when a policy, a model's Gateway name, the models that get a session's
-  // cache key or the deadline changes.
+  // when a policy, the way a model is reached, the models that get a
+  // session's cache key or the deadline changes.
   it.each([
-    ["policy/starter", "38edb99e2f030f12"],
+    ["policy/starter", "f8859daccaa6c877"],
     ["direct/openai/gpt-6-luna", "dd877082304b7be2"],
     ["direct/fireworks/glm-5.3-flash", "873338b98cd92471"],
     ["direct/fireworks/glm-5.3", "856604f0d1e0dfcd"],
     ["direct/openai/gpt-6-sol", "547a492bf62a0c4c"],
-    ["direct/anthropic/claude-opus-5.5", "ce5090bf6c53a03f"],
+    ["direct/anthropic/claude-opus-5.5", "84a95f482d3cfee6"],
   ])("keeps the config hash of %s", async (model, hash) => {
     // The deployed pool has models that are called through the AI binding.
     const settings = await readSettings({
